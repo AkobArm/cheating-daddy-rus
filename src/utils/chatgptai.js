@@ -372,6 +372,7 @@ async function sendChatGPTText(text) {
 }
 
 function closeChatGPTSession() {
+    session?.mixer?.flush();
     realtime.stopRealtimeTranscription();
     session = null;
     latestScreenshot = null;

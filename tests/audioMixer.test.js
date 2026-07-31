@@ -127,3 +127,27 @@ test('reset очищает очереди', () => {
     mixer.pushSystem(tone(1000, samples24kFor(FRAME_SAMPLES / 2)));
     assert.strictEqual(frames.length, 0, 'после reset накопленного не осталось, на полкадра не хватает');
 });
+
+test('flush отдаёт хвост, застрявший в ожидании второго источника', () => {
+    const frames = [];
+    let clock = 1000;
+    const mixer = createAudioMixer(f => frames.push(f), { now: () => clock });
+
+    // системного звука больше, чем микрофонного: хвост ждёт микрофон, которого не будет
+    mixer.pushSystem(tone(1000, samples24kFor(FRAME_SAMPLES * 3)));
+    mixer.pushMic(tone(2000, samples24kFor(FRAME_SAMPLES)));
+    const beforeFlush = frames.reduce((sum, f) => sum + f.length / 2, 0);
+
+    mixer.flush();
+    const afterFlush = frames.reduce((sum, f) => sum + f.length / 2, 0);
+
+    assert.ok(afterFlush > beforeFlush, 'flush должен выпустить накопленное');
+    assert.ok(afterFlush >= FRAME_SAMPLES * 3, `ожидали минимум 3 кадра, получили ${afterFlush / FRAME_SAMPLES}`);
+});
+
+test('flush на пустых очередях ничего не отдаёт', () => {
+    const frames = [];
+    const mixer = createAudioMixer(f => frames.push(f), { now: () => 1000 });
+    mixer.flush();
+    assert.strictEqual(frames.length, 0);
+});

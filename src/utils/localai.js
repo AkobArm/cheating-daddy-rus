@@ -435,6 +435,8 @@ function processLocalAudio(monoChunk24k, source = 'system') {
 }
 
 function closeLocalSession() {
+    // Хвост записи мог остаться в очереди микшера — выпускаем его до остановки
+    audioMixer?.flush();
     isLocalActive = false;
     initializationController?.abort();
     initializationController = null;

@@ -11,8 +11,9 @@
 
 // 100 мс при 16 кГц — тот же размер кадра, которым оперирует VAD
 const FRAME_SAMPLES = 1600;
-// Если от источника давно нет данных, считаем его молчащим и не ждём его дольше
-const SOURCE_IDLE_MS = 400;
+// Если от источника давно нет данных, считаем его молчащим и не ждём его дольше.
+// Это прямая задержка распознавания, поэтому держим её близко к длине кадра.
+const SOURCE_IDLE_MS = 250;
 
 function createResampler() {
     let remainder = Buffer.alloc(0);
@@ -132,6 +133,34 @@ function createAudioMixer(onFrame, options = {}) {
             micLastAt = now();
             micQueue = Buffer.concat([micQueue, micResampler.resample(chunk24k)]);
             drain();
+        },
+        /**
+         * Отдаёт всё накопленное, не дожидаясь таймаутов и не добирая до полного кадра.
+         * Нужен на остановке потока: иначе хвост записи так и остался бы в очереди.
+         */
+        flush() {
+            for (;;) {
+                const systemChunk = systemQueue.length > 0 ? systemQueue.subarray(0, frameBytes) : null;
+                const micChunk = micQueue.length > 0 ? micQueue.subarray(0, frameBytes) : null;
+                if (!systemChunk && !micChunk) return;
+
+                let frame;
+                if (systemChunk && micChunk) {
+                    // Кадры могут быть разной длины — короткий добиваем тишиной, чтобы не терять длинный
+                    const length = Math.max(systemChunk.length, micChunk.length);
+                    const a = Buffer.alloc(length);
+                    const b = Buffer.alloc(length);
+                    systemChunk.copy(a);
+                    micChunk.copy(b);
+                    frame = mixFrames(a, b);
+                } else {
+                    frame = Buffer.from(systemChunk || micChunk);
+                }
+
+                systemQueue = systemQueue.subarray(Math.min(frameBytes, systemQueue.length));
+                micQueue = micQueue.subarray(Math.min(frameBytes, micQueue.length));
+                onFrame(frame);
+            }
         },
         reset() {
             systemResampler.reset();
