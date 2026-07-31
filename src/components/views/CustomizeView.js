@@ -909,7 +909,9 @@ export class CustomizeView extends LitElement {
 
                     <div class="form-group vertical">
                         <label class="form-label">Answer model</label>
-                        <select class="control" .value=${this.chatgptModel} @change=${this.handleChatgptModelSelect}>
+                        <!-- Без .value на <select>: Lit применяет его раньше, чем вставит опции из .map(),
+                             и селект откатывается на первую. Выбор задаём через ?selected на опциях -->
+                        <select class="control" @change=${this.handleChatgptModelSelect}>
                             ${this.chatgptModels.map(
                                 m => html`<option value=${m.slug} ?selected=${this.chatgptModel === m.slug}>${m.displayName}</option>`
                             )}
