@@ -129,6 +129,33 @@ export class HistoryView extends LitElement {
                 gap: 6px;
             }
 
+            .screen-shot {
+                width: 100%;
+                max-height: 180px;
+                object-fit: cover;
+                object-position: top;
+                border: 1px solid var(--border);
+                border-radius: var(--radius-sm);
+                margin-bottom: var(--space-sm);
+                cursor: zoom-in;
+                background: var(--bg-app);
+            }
+
+            .screen-shot[data-expanded='true'] {
+                max-height: none;
+                object-fit: contain;
+                cursor: zoom-out;
+            }
+
+            .screen-prompt {
+                font-size: var(--font-size-xs);
+                color: var(--text-muted);
+                white-space: pre-wrap;
+                border-left: 2px solid var(--border-strong);
+                padding-left: var(--space-sm);
+                margin-bottom: var(--space-sm);
+            }
+
             .summary-body {
                 white-space: pre-wrap;
                 line-height: 1.55;
@@ -277,6 +304,7 @@ export class HistoryView extends LitElement {
         activeTab: { type: String },
         summaryLoading: { type: Boolean },
         summaryError: { type: String },
+        expandedShot: { type: Number },
         searchQuery: { type: String },
     };
 
@@ -289,6 +317,7 @@ export class HistoryView extends LitElement {
         this.activeTab = 'conversation';
         this.summaryLoading = false;
         this.summaryError = '';
+        this.expandedShot = null;
         this.searchQuery = '';
         this.loadSessions();
     }
@@ -395,6 +424,12 @@ export class HistoryView extends LitElement {
         return messages;
     }
 
+    /** Клик разворачивает снимок: в ленте он показывается уменьшенным. */
+    toggleShot(timestamp) {
+        this.expandedShot = this.expandedShot === timestamp ? null : timestamp;
+        this.requestUpdate();
+    }
+
     async requestSummary() {
         if (this.summaryLoading || !this.selectedSessionId) return;
         this.summaryLoading = true;
@@ -464,6 +499,18 @@ export class HistoryView extends LitElement {
                 entry => html`
                     <div class="message-row screen">
                         <div class="message">
+                            ${
+                                entry.screenshot
+                                    ? html`<img
+                                          class="screen-shot"
+                                          src="data:image/jpeg;base64,${entry.screenshot}"
+                                          alt="Снимок экрана"
+                                          @click=${() => this.toggleShot(entry.timestamp)}
+                                          data-expanded=${this.expandedShot === entry.timestamp}
+                                      />`
+                                    : ''
+                            }
+                            ${entry.prompt ? html`<div class="screen-prompt">${entry.prompt}</div>` : ''}
                             <div class="message-body">${entry.response || ''}</div>
                             <div class="message-meta">${this.formatTime(entry.timestamp)}</div>
                         </div>

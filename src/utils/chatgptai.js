@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { sendToRenderer, initializeNewSession, saveConversationTurn } = require('./gemini');
+const { sendToRenderer, initializeNewSession, saveConversationTurn, saveScreenAnalysis } = require('./gemini');
 const { getSystemPrompt } = require('./prompts');
 const transcription = require('./transcription');
 const { createAudioMixer } = require('./audioMixer');
@@ -333,7 +333,17 @@ async function streamResponses(content, retryOn401 = true) {
 
     if (fullText) {
         const promptText = content.map(c => c.text || '[image]').join(' ');
-        saveConversationTurn(promptText, fullText);
+        const imagePart = content.find(part => part.type === 'input_image');
+
+        if (imagePart) {
+            // Скриншоты идут во вкладку Screen вместе с кадром: в ленте беседы они выглядели
+            // как реплика пользователя с текстом служебного промпта
+            const base64 = String(imagePart.image_url || '').replace(/^data:image\/\w+;base64,/, '');
+            saveScreenAnalysis(promptText, fullText, session?.model || 'chatgpt', base64);
+        } else {
+            saveConversationTurn(promptText, fullText);
+        }
+
         if (session) {
             // Запоминаем запрос целиком (вместе с картинкой), чтобы можно было переспросить
             session.lastRequest = content;

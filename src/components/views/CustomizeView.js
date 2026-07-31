@@ -274,6 +274,8 @@ export class CustomizeView extends LitElement {
         selectedDisplayId: { type: String },
         screenSources: { type: Array },
         screensLoading: { type: Boolean },
+        keepWindowOnTop: { type: Boolean },
+        manualScreenshotPrompt: { type: String },
         layoutMode: { type: String },
         keybinds: { type: Object },
         googleSearchEnabled: { type: Boolean },
@@ -313,6 +315,8 @@ export class CustomizeView extends LitElement {
         this.selectedDisplayId = '';
         this.screenSources = [];
         this.screensLoading = false;
+        this.keepWindowOnTop = true;
+        this.manualScreenshotPrompt = '';
         this.layoutMode = 'normal';
         this.keybinds = this.getDefaultKeybinds();
         this.onProfileChange = () => {};
@@ -400,6 +404,8 @@ export class CustomizeView extends LitElement {
             this.chatgptSilenceMs = prefs.chatgptSilenceMs ?? 800;
             this.chatgptHistoryTurns = prefs.chatgptHistoryTurns ?? 10;
             this.speechDetectorEnabled = prefs.speechDetectorEnabled !== false;
+            this.keepWindowOnTop = prefs.keepWindowOnTop !== false;
+            this.manualScreenshotPrompt = prefs.manualScreenshotPrompt || '';
             this.openaiOauthStatus = oauthStatus || this.openaiOauthStatus;
             if (oauthAuth?.expiresAt) {
                 this.openaiOauthStatus = {
@@ -679,6 +685,19 @@ export class CustomizeView extends LitElement {
         this.requestUpdate();
     }
 
+    async handleScreenshotPromptInput(e) {
+        this.manualScreenshotPrompt = e.target.value;
+        await cheatingDaddy.storage.updatePreference('manualScreenshotPrompt', this.manualScreenshotPrompt);
+    }
+
+    async handleKeepOnTopToggle(e) {
+        this.keepWindowOnTop = e.target.checked;
+        await cheatingDaddy.storage.updatePreference('keepWindowOnTop', this.keepWindowOnTop);
+        // Применяем сразу, чтобы не заставлять перезапускать приложение
+        await cheatingDaddy.windowControls.setAlwaysOnTop(this.keepWindowOnTop);
+        this.requestUpdate();
+    }
+
     async handleDisplaySelect(displayId) {
         this.selectedDisplayId = displayId;
         await cheatingDaddy.storage.updatePreference('selectedDisplayId', displayId);
@@ -951,6 +970,19 @@ export class CustomizeView extends LitElement {
                     </div>
                 </div>
                 ${this.renderScreenPicker()}
+
+                <div class="form-group vertical" style="margin-top: var(--space-md);">
+                    <label class="form-label">Screenshot prompt</label>
+                    <textarea
+                        rows="4"
+                        placeholder="Оставьте пустым, чтобы использовать стандартный запрос"
+                        .value=${this.manualScreenshotPrompt}
+                        @change=${this.handleScreenshotPromptInput}
+                    ></textarea>
+                    <div class="form-help">
+                        Что спросить у модели по снимку экрана. По умолчанию — разбор задачи или кода на экране. Применяется со следующего скриншота.
+                    </div>
+                </div>
             </section>
         `;
     }
@@ -998,6 +1030,27 @@ export class CustomizeView extends LitElement {
                     звонком.
                 </div>
             </div>
+        `;
+    }
+
+    renderWindowSection() {
+        return html`
+            <section class="surface">
+                <div class="surface-title">Window</div>
+                <div class="form-grid">
+                    <div class="toggle-row">
+                        <input
+                            type="checkbox"
+                            class="toggle-input"
+                            id="keepOnTop"
+                            .checked=${this.keepWindowOnTop}
+                            @change=${this.handleKeepOnTopToggle}
+                        />
+                        <label class="toggle-label" for="keepOnTop">Keep window above other apps</label>
+                    </div>
+                    <div class="form-help">Без этого окно уходит за окно созвона при первом же клике мимо него. Применяется сразу.</div>
+                </div>
+            </section>
         `;
     }
 
@@ -1294,8 +1347,8 @@ export class CustomizeView extends LitElement {
             <div class="unified-page">
                 <div class="unified-wrap">
                     <div class="page-title">Settings</div>
-                    ${this.renderAudioSection()} ${this.renderLanguageSection()} ${this.renderAppearanceSection()} ${this.renderOpenAISection()}
-                    ${this.renderKeyboardSection()} ${this.renderPrivacySection()}
+                    ${this.renderAudioSection()} ${this.renderWindowSection()} ${this.renderLanguageSection()} ${this.renderAppearanceSection()}
+                    ${this.renderOpenAISection()} ${this.renderKeyboardSection()} ${this.renderPrivacySection()}
                 </div>
             </div>
         `;

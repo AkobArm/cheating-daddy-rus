@@ -138,6 +138,13 @@ const oauth = {
     },
 };
 
+const windowControls = {
+    /** Закрепление поверх других окон — применяется немедленно. */
+    async setAlwaysOnTop(enabled) {
+        return ipcRenderer.invoke('set-always-on-top', enabled);
+    },
+};
+
 const screens = {
     /** Список мониторов для выбора источника скриншотов. */
     async list() {
@@ -627,10 +634,17 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
     );
 }
 
-const MANUAL_SCREENSHOT_PROMPT = `Help me on this page, give me the answer no bs, complete answer.
-So if its a code question, give me the approach in few bullet points, then the entire code. Also if theres anything else i need to know, tell me.
-If its a question about the website, give me the answer no bs, complete answer.
-If its a mcq question, give me the answer no bs, complete answer.`;
+// Что спросить у модели по кадру экрана. Заменяется настройкой manualScreenshotPrompt.
+const DEFAULT_MANUAL_SCREENSHOT_PROMPT = `Разбери, что сейчас на экране, и дай прямой ответ по делу.
+Если это задача по программированию — сначала подход в 2-4 пунктах, затем полный код с типами и обработкой ошибок.
+Если это вопрос или текст — ответь кратко и конкретно, без воды.
+Если на экране код с ошибкой — укажи, где именно проблема, и как её исправить.
+Отвечай на языке вопроса.`;
+
+function getManualScreenshotPrompt() {
+    const custom = (preferencesCache?.manualScreenshotPrompt || '').trim();
+    return custom || DEFAULT_MANUAL_SCREENSHOT_PROMPT;
+}
 
 async function captureManualScreenshot(imageQuality = null) {
     console.log('Manual screenshot triggered');
@@ -717,7 +731,7 @@ async function captureManualScreenshot(imageQuality = null) {
                 // Send image with prompt to HTTP API (response streams via IPC events)
                 const result = await ipcRenderer.invoke('send-image-content', {
                     data: base64data,
-                    prompt: MANUAL_SCREENSHOT_PROMPT,
+                    prompt: getManualScreenshotPrompt(),
                 });
 
                 if (result.success) {
@@ -1184,6 +1198,9 @@ const cheatingDaddy = {
 
     // Screen sources
     screens,
+
+    // Window controls
+    windowControls,
 
     // Theme API
     theme,

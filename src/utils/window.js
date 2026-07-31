@@ -20,7 +20,9 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         frame: false,
         transparent: true,
         hasShadow: false,
-        alwaysOnTop: process.platform === 'win32',
+        // Окно-подсказчик должно оставаться поверх окна созвона, иначе за ним не видно ответов.
+        // Upstream оставил это только для Windows и только на время сессии — возвращаем как настройку.
+        alwaysOnTop: storage.getPreferences().keepWindowOnTop !== false,
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false, // TODO: change to true
@@ -52,7 +54,8 @@ function createWindow(sendToRenderer, geminiSessionRef) {
     );
 
     mainWindow.setContentProtection(true);
-    if (process.platform === 'win32') {
+    if (storage.getPreferences().keepWindowOnTop !== false) {
+        // Уровень screen-saver нужен, чтобы окно не пряталось за полноэкранным созвоном
         mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
         mainWindow.setAlwaysOnTop(true, 'screen-saver', 1);
     }
@@ -305,16 +308,36 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
     ipcMain.on('view-changed', (event, view) => {
         if (!mainWindow.isDestroyed()) {
             const isLiveMode = view === 'assistant';
+            // Если окно закреплено поверх, оно остаётся таким и вне сессии: иначе при клике
+            // в соседнее окно приложение уходило на задний план прямо посреди работы
+            const keepOnTop = storage.getPreferences().keepWindowOnTop !== false;
 
             if (process.platform !== 'win32') {
-                mainWindow.setAlwaysOnTop(isLiveMode);
-                mainWindow.setVisibleOnAllWorkspaces(isLiveMode, { visibleOnFullScreen: isLiveMode });
+                mainWindow.setAlwaysOnTop(keepOnTop || isLiveMode);
+                mainWindow.setVisibleOnAllWorkspaces(keepOnTop || isLiveMode, {
+                    visibleOnFullScreen: keepOnTop || isLiveMode,
+                });
             }
 
             if (!isLiveMode) {
                 mainWindow.setIgnoreMouseEvents(false);
             }
         }
+    });
+
+    // Настройка применяется сразу: перезапускать приложение ради этого не нужно
+    ipcMain.handle('set-always-on-top', (event, enabled) => {
+        if (mainWindow.isDestroyed()) {
+            return { success: false };
+        }
+        if (enabled) {
+            mainWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+            mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+        } else {
+            mainWindow.setAlwaysOnTop(false);
+            mainWindow.setVisibleOnAllWorkspaces(false, { visibleOnFullScreen: false });
+        }
+        return { success: true };
     });
 
     ipcMain.handle('window-minimize', () => {

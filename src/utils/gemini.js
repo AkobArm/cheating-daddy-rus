@@ -130,7 +130,13 @@ function saveConversationTurn(transcription, aiResponse) {
     });
 }
 
-function saveScreenAnalysis(prompt, response, model) {
+/**
+ * @param {string} prompt текст запроса
+ * @param {string} response ответ модели
+ * @param {string} model идентификатор модели
+ * @param {string|null} screenshot кадр в base64 (JPEG) — без него в истории не понять, к чему ответ
+ */
+function saveScreenAnalysis(prompt, response, model, screenshot = null) {
     if (!currentSessionId) {
         initializeNewSession();
     }
@@ -140,6 +146,7 @@ function saveScreenAnalysis(prompt, response, model) {
         prompt: prompt,
         response: response.trim(),
         model: model,
+        screenshot: screenshot || null,
     };
 
     screenAnalysisHistory.push(analysisEntry);
@@ -536,7 +543,7 @@ async function sendImageToGroq(base64Data, prompt) {
             return { success: false, error: GROQ_EMPTY_RESPONSE_MESSAGE };
         }
 
-        saveScreenAnalysis(prompt, cleanedResponse, model);
+        saveScreenAnalysis(prompt, cleanedResponse, model, base64Data);
         logTransportEvent('groq.image.completed', {
             model,
             response: cleanedResponse,
@@ -1050,7 +1057,7 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
         console.log(`Image response completed from ${model}`);
 
         // Save screen analysis to history
-        saveScreenAnalysis(prompt, fullText, model);
+        saveScreenAnalysis(prompt, fullText, model, base64Data);
 
         return { success: true, text: fullText, model: model };
     } catch (error) {
@@ -1459,6 +1466,7 @@ module.exports = {
     stopMacOSAudioCapture,
     sendAudioToGemini,
     sendImageToGeminiHttp,
+    saveScreenAnalysis,
     setupGeminiIpcHandlers,
     formatSpeakerResults,
 };
