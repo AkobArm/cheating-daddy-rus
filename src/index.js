@@ -390,6 +390,39 @@ function setupGeneralIpcHandlers() {
         return await listChatGptModels();
     });
 
+    // Имена от desktopCapturer бесполезны («Экран 1/2/3»), поэтому подмешиваем
+    // человеческие label и геометрию из screen API, связывая их по display_id
+    ipcMain.handle('get-screen-sources', async () => {
+        try {
+            const { desktopCapturer, screen } = require('electron');
+            const sources = await desktopCapturer.getSources({
+                types: ['screen'],
+                thumbnailSize: { width: 320, height: 200 },
+            });
+            const displays = screen.getAllDisplays();
+            const primaryId = screen.getPrimaryDisplay().id;
+
+            const data = sources.map((source, index) => {
+                const display = displays.find(d => String(d.id) === String(source.display_id));
+                const thumbnail = source.thumbnail;
+                const hasPreview = thumbnail && !thumbnail.isEmpty();
+                return {
+                    displayId: String(source.display_id ?? ''),
+                    name: display?.label || source.name || `Экран ${index + 1}`,
+                    isPrimary: display ? display.id === primaryId : false,
+                    width: display?.bounds?.width ?? null,
+                    height: display?.bounds?.height ?? null,
+                    // Пустой thumbnail бывает у спящего монитора — превью просто не показываем
+                    thumbnail: hasPreview ? thumbnail.toDataURL() : null,
+                };
+            });
+            return { success: true, data };
+        } catch (error) {
+            console.error('Error listing screen sources:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     ipcMain.handle('summarize-session', async (event, sessionId) => {
         const session = storage.getSession(sessionId);
         if (!session) {

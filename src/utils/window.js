@@ -36,10 +36,19 @@ function createWindow(sendToRenderer, geminiSessionRef) {
     session.defaultSession.setDisplayMediaRequestHandler(
         (request, callback) => {
             desktopCapturer.getSources({ types: ['screen'] }).then(sources => {
-                callback({ video: sources[0], audio: 'loopback' });
+                // Порядок источников произвольный — sources[0] далеко не всегда основной экран.
+                // На нескольких мониторах из-за этого приходил скриншот не того экрана.
+                const preferred = String(storage.getPreferences().selectedDisplayId || '');
+                const chosen = preferred ? sources.find(source => String(source.display_id) === preferred) : null;
+
+                if (preferred && !chosen) {
+                    console.log(`[Capture] Экран ${preferred} недоступен (отключён?) — беру первый доступный`);
+                }
+                callback({ video: chosen || sources[0], audio: 'loopback' });
             });
         },
-        { useSystemPicker: true }
+        // Свой выбор экрана: системный диалог здесь только мешал бы во время созвона
+        { useSystemPicker: false }
     );
 
     mainWindow.setContentProtection(true);

@@ -13,6 +13,90 @@ export class CustomizeView extends LitElement {
     static styles = [
         unifiedPageStyles,
         css`
+            .screen-picker-head {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: var(--space-sm);
+            }
+
+            .screen-refresh {
+                padding: 4px 10px;
+                font-size: var(--font-size-xs);
+                border-color: var(--border);
+                color: var(--text-secondary);
+            }
+
+            .screen-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+                gap: var(--space-sm);
+            }
+
+            .screen-card {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                padding: 6px;
+                background: var(--bg-elevated);
+                border: 1px solid var(--border);
+                border-radius: var(--radius-sm);
+                cursor: pointer;
+                text-align: left;
+                transition:
+                    border-color var(--transition),
+                    background var(--transition);
+            }
+
+            .screen-card:hover {
+                border-color: var(--border-strong);
+            }
+
+            .screen-card.active {
+                border-color: var(--accent);
+                background: var(--bg-surface);
+            }
+
+            .screen-thumb {
+                width: 100%;
+                aspect-ratio: 16 / 10;
+                object-fit: cover;
+                border-radius: var(--radius-sm);
+                background: var(--bg-app);
+            }
+
+            .screen-thumb-auto {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: var(--text-muted);
+                font-size: var(--font-size-xs);
+                font-family: var(--font-mono);
+            }
+
+            .screen-name {
+                font-size: var(--font-size-xs);
+                color: var(--text-primary);
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                flex-wrap: wrap;
+            }
+
+            .screen-badge {
+                font-size: 10px;
+                color: var(--text-muted);
+                border: 1px solid var(--border);
+                border-radius: var(--radius-sm);
+                padding: 0 4px;
+            }
+
+            .screen-size {
+                font-size: 10px;
+                color: var(--text-muted);
+                font-family: var(--font-mono);
+            }
+
             .danger-surface {
                 border-color: var(--danger);
             }
@@ -187,6 +271,9 @@ export class CustomizeView extends LitElement {
         selectedProfile: { type: String },
         selectedLanguage: { type: String },
         selectedImageQuality: { type: String },
+        selectedDisplayId: { type: String },
+        screenSources: { type: Array },
+        screensLoading: { type: Boolean },
         layoutMode: { type: String },
         keybinds: { type: Object },
         googleSearchEnabled: { type: Boolean },
@@ -223,6 +310,9 @@ export class CustomizeView extends LitElement {
         this.selectedProfile = 'interview';
         this.selectedLanguage = 'ru-RU';
         this.selectedImageQuality = 'medium';
+        this.selectedDisplayId = '';
+        this.screenSources = [];
+        this.screensLoading = false;
         this.layoutMode = 'normal';
         this.keybinds = this.getDefaultKeybinds();
         this.onProfileChange = () => {};
@@ -260,6 +350,7 @@ export class CustomizeView extends LitElement {
 
     connectedCallback() {
         super.connectedCallback();
+        this._loadScreenSources();
         // Не в конструкторе: Lit пересоздаёт компонент при ре-рендере родителя,
         // и запрос уходил бы повторно на каждое пересоздание
         this._loadChatgptModels();
@@ -567,6 +658,33 @@ export class CustomizeView extends LitElement {
         this.requestUpdate();
     }
 
+    /** Список мониторов перечитываем при каждом открытии: их могли подключить или отключить. */
+    async _loadScreenSources() {
+        this.screensLoading = true;
+        this.requestUpdate();
+        try {
+            this.screenSources = await cheatingDaddy.screens.list();
+            const prefs = await cheatingDaddy.storage.getPreferences();
+            this.selectedDisplayId = prefs.selectedDisplayId || '';
+            // Выбранный монитор мог отключиться — иначе в селекте осталась бы мёртвая позиция
+            if (this.selectedDisplayId && !this.screenSources.some(s => s.displayId === this.selectedDisplayId)) {
+                this.selectedDisplayId = '';
+                await cheatingDaddy.storage.updatePreference('selectedDisplayId', '');
+            }
+        } catch (error) {
+            console.error('Не удалось получить список экранов:', error);
+            this.screenSources = [];
+        }
+        this.screensLoading = false;
+        this.requestUpdate();
+    }
+
+    async handleDisplaySelect(displayId) {
+        this.selectedDisplayId = displayId;
+        await cheatingDaddy.storage.updatePreference('selectedDisplayId', displayId);
+        this.requestUpdate();
+    }
+
     async handleSpeechDetectorToggle(e) {
         this.speechDetectorEnabled = e.target.checked;
         await cheatingDaddy.storage.updatePreference('speechDetectorEnabled', this.speechDetectorEnabled);
@@ -832,7 +950,54 @@ export class CustomizeView extends LitElement {
                         </select>
                     </div>
                 </div>
+                ${this.renderScreenPicker()}
             </section>
+        `;
+    }
+
+    renderScreenPicker() {
+        // На одном мониторе выбирать нечего — не захламляем настройки
+        if (!this.screensLoading && this.screenSources.length < 2) {
+            return '';
+        }
+
+        return html`
+            <div class="form-group vertical" style="margin-top: var(--space-md);">
+                <div class="screen-picker-head">
+                    <label class="form-label">Screen to capture</label>
+                    <button class="danger-button screen-refresh" ?disabled=${this.screensLoading} @click=${this._loadScreenSources}>
+                        ${this.screensLoading ? 'Обновляю…' : 'Обновить'}
+                    </button>
+                </div>
+                <div class="screen-grid">
+                    <button class="screen-card ${this.selectedDisplayId === '' ? 'active' : ''}" @click=${() => this.handleDisplaySelect('')}>
+                        <div class="screen-thumb screen-thumb-auto">AUTO</div>
+                        <div class="screen-name">Первый доступный</div>
+                    </button>
+                    ${this.screenSources.map(
+                        source => html`
+                            <button
+                                class="screen-card ${this.selectedDisplayId === source.displayId ? 'active' : ''}"
+                                @click=${() => this.handleDisplaySelect(source.displayId)}
+                            >
+                                ${
+                                    source.thumbnail
+                                        ? html`<img class="screen-thumb" src=${source.thumbnail} alt=${source.name} />`
+                                        : html`<div class="screen-thumb screen-thumb-auto">нет превью</div>`
+                                }
+                                <div class="screen-name">
+                                    ${source.name}${source.isPrimary ? html`<span class="screen-badge">основной</span>` : ''}
+                                </div>
+                                ${source.width ? html`<div class="screen-size">${source.width}×${source.height}</div>` : ''}
+                            </button>
+                        `
+                    )}
+                </div>
+                <div class="form-help">
+                    Скриншоты берутся с выбранного монитора. Превью показывает, что на нём сейчас — так проще не перепутать экран с кодом и экран со
+                    звонком.
+                </div>
+            </div>
         `;
     }
 

@@ -30,6 +30,9 @@ const DEFAULT_PREFERENCES = {
     selectedProfile: 'interview',
     selectedLanguage: 'ru-RU',
     selectedScreenshotInterval: '5',
+    // Какой монитор снимать. Пусто — первый доступный (на нескольких экранах это лотерея,
+    // поэтому при нескольких мониторах экран стоит выбрать явно).
+    selectedDisplayId: '',
     selectedImageQuality: 'medium',
     advancedMode: false,
     audioMode: 'speaker_only',

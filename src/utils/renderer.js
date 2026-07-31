@@ -138,6 +138,14 @@ const oauth = {
     },
 };
 
+const screens = {
+    /** Список мониторов для выбора источника скриншотов. */
+    async list() {
+        const result = await ipcRenderer.invoke('get-screen-sources');
+        return result?.success ? result.data : [];
+    },
+};
+
 const sessions = {
     /** Разбор беседы: считается один раз и сохраняется в сессии. */
     async summarize(sessionId) {
@@ -1173,6 +1181,9 @@ const cheatingDaddy = {
 
     // Session tools
     sessions,
+
+    // Screen sources
+    screens,
 
     // Theme API
     theme,
