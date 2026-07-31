@@ -70,6 +70,7 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
             silenceFrames: Math.max(1, Math.round((prefs.chatgptSilenceMs ?? DEFAULT_SILENCE_FRAMES * FRAME_MS) / FRAME_MS)),
             historyLimit: prefs.chatgptHistoryTurns ?? DEFAULT_HISTORY_MESSAGES,
             lastRequest: null, // последний запрос — для повторной генерации
+            lastRequestWasScreen: false,
             mixer: null,
         };
         const audioMode = prefs.audioMode || 'speaker_only';
@@ -259,7 +260,14 @@ function buildBody(model, instructions, content, history = [], reasoningEffort =
     return JSON.stringify(payload);
 }
 
-async function streamResponses(content, retryOn401 = true) {
+/**
+ * @param {Array} content части запроса
+ * @param {{retryOn401?: boolean, isScreenAnalysis?: boolean}} options
+ *   isScreenAnalysis отличает ручной разбор экрана от голосовой реплики, к которой
+ *   просто приложен последний кадр — иначе обычный диалог уезжал бы во вкладку Screen
+ */
+async function streamResponses(content, options = {}) {
+    const { retryOn401 = true, isScreenAnalysis = false } = options;
     const auth = await ensureValidOpenAIAuth();
     if (!auth || !auth.accessToken) {
         sendToRenderer('update-status', 'ChatGPT account not connected');
@@ -278,7 +286,7 @@ async function streamResponses(content, retryOn401 = true) {
     if (resp.status === 401 && retryOn401) {
         const refreshed = await refreshOpenAIAuth(auth).catch(() => null);
         if (refreshed) {
-            return streamResponses(content, false);
+            return streamResponses(content, { ...options, retryOn401: false });
         }
     }
     if (!resp.ok) {
@@ -333,13 +341,12 @@ async function streamResponses(content, retryOn401 = true) {
 
     if (fullText) {
         const promptText = content.map(c => c.text || '[image]').join(' ');
-        const imagePart = content.find(part => part.type === 'input_image');
-
-        if (imagePart) {
-            // Скриншоты идут во вкладку Screen вместе с кадром: в ленте беседы они выглядели
+        if (isScreenAnalysis) {
+            // Разбор экрана уходит во вкладку Screen вместе с кадром: в ленте беседы он выглядел
             // как реплика пользователя с текстом служебного промпта
-            const base64 = String(imagePart.image_url || '').replace(/^data:image\/\w+;base64,/, '');
-            saveScreenAnalysis(promptText, fullText, session?.model || 'chatgpt', base64);
+            const imagePart = content.find(part => part.type === 'input_image');
+            const base64 = String(imagePart?.image_url || '').replace(/^data:image\/\w+;base64,/, '');
+            saveScreenAnalysis(promptText, fullText, session?.model || 'chatgpt', base64 || null);
         } else {
             saveConversationTurn(promptText, fullText);
         }
@@ -347,6 +354,7 @@ async function streamResponses(content, retryOn401 = true) {
         if (session) {
             // Запоминаем запрос целиком (вместе с картинкой), чтобы можно было переспросить
             session.lastRequest = content;
+            session.lastRequestWasScreen = isScreenAnalysis;
             session.history.push({ role: 'user', text: promptText }, { role: 'assistant', text: fullText });
             if (session.history.length > session.historyLimit) {
                 session.history = session.history.slice(-session.historyLimit);
@@ -381,7 +389,7 @@ async function sendChatGPTImage(base64Data, prompt = '') {
     ];
     sendToRenderer('update-status', 'Analyzing image...');
     try {
-        await streamResponses(content);
+        await streamResponses(content, { isScreenAnalysis: true });
     } catch (error) {
         sendToRenderer('update-status', 'ChatGPT error: ' + error.message);
     }
@@ -421,7 +429,7 @@ async function regenerateLastAnswer() {
     isGenerating = true;
     sendToRenderer('update-status', 'Regenerating...');
     try {
-        await streamResponses(session.lastRequest);
+        await streamResponses(session.lastRequest, { isScreenAnalysis: session.lastRequestWasScreen });
     } catch (error) {
         sendToRenderer('update-status', 'ChatGPT error: ' + error.message);
         return false;
