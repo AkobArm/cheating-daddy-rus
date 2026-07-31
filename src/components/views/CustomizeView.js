@@ -953,14 +953,15 @@ export class CustomizeView extends LitElement {
                     <div class="form-group vertical">
                         <label class="form-label">Transcription model (local Whisper)</label>
                         <select class="control" .value=${this.chatgptWhisperModel} @change=${this.handleWhisperModelSelect}>
-                            <option value="Xenova/whisper-tiny">tiny (fastest, weakest)</option>
-                            <option value="Xenova/whisper-base">base (fast)</option>
-                            <option value="Xenova/whisper-small">small (better Russian)</option>
-                            <option value="Xenova/whisper-medium">medium (best, slow, large download)</option>
+                            <option value="tiny">tiny (78 MB, fastest, weakest)</option>
+                            <option value="base">base (148 MB, fast)</option>
+                            <option value="small">small (488 MB, better Russian)</option>
+                            <option value="large-v3-turbo-q5_0">large v3 turbo Q5 (574 MB, best quality/speed)</option>
+                            <option value="large-v3-turbo">large v3 turbo (1.6 GB, best quality)</option>
                         </select>
                         <div class="form-help">
-                            Local speech-to-text model. Bigger = more accurate (esp. Russian/terms), slower. First use downloads the model. Applies to
-                            the next session.
+                            Runs on whisper.cpp with GPU acceleration. Bigger = more accurate (esp. Russian/terms). Turbo models are the best
+                            trade-off: near-large quality at medium speed. First use downloads the model. Applies to the next session.
                         </div>
                     </div>
 

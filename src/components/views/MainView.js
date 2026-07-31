@@ -709,6 +709,7 @@ export class MainView extends LitElement {
         _useCustomLocalLlmModel: { state: true },
         _whisperModel: { state: true },
         _selectedLanguage: { state: true },
+        _localVisionEnabled: { state: true },
         _showLocalHelp: { state: true },
     };
 
@@ -739,6 +740,7 @@ export class MainView extends LitElement {
         this._useCustomLocalLlmModel = false;
         this._whisperModel = 'tiny.en';
         this._selectedLanguage = 'en-US';
+        this._localVisionEnabled = true;
 
         this._animId = null;
         this._time = 0;
@@ -779,6 +781,7 @@ export class MainView extends LitElement {
             this._useCustomLocalLlmModel = !LOCAL_LLM_PRESETS.some(preset => preset.value === this._localLlmModel);
             this._whisperModel = prefs.whisperModel || 'tiny.en';
             this._selectedLanguage = prefs.selectedLanguage || 'en-US';
+            this._localVisionEnabled = prefs.localVisionEnabled !== false;
 
             this.requestUpdate();
         } catch (e) {
@@ -1001,6 +1004,12 @@ export class MainView extends LitElement {
     async _saveWhisperModel(val) {
         this._whisperModel = val;
         await cheatingDaddy.storage.updatePreference('whisperModel', val);
+        this.requestUpdate();
+    }
+
+    async _saveLocalVision(enabled) {
+        this._localVisionEnabled = enabled;
+        await cheatingDaddy.storage.updatePreference('localVisionEnabled', enabled);
         this.requestUpdate();
     }
 
@@ -1316,7 +1325,13 @@ export class MainView extends LitElement {
                                 <option value="tiny" ?selected=${this._whisperModel === 'tiny'}>Tiny (78 MB, fastest)</option>
                                 <option value="base" ?selected=${this._whisperModel === 'base'}>Base (148 MB)</option>
                                 <option value="small" ?selected=${this._whisperModel === 'small'}>Small (488 MB, more accurate)</option>
-                                <option value="medium" ?selected=${this._whisperModel === 'medium'}>Medium (1.5 GB, most accurate)</option>
+                                <option value="large-v3-turbo-q5_0" ?selected=${this._whisperModel === 'large-v3-turbo-q5_0'}>
+                                    Large v3 Turbo Q5 (574 MB, best quality/speed)
+                                </option>
+                                <option value="large-v3-turbo" ?selected=${this._whisperModel === 'large-v3-turbo'}>
+                                    Large v3 Turbo (1.6 GB, best quality)
+                                </option>
+                                <option value="medium" ?selected=${this._whisperModel === 'medium'}>Medium (1.5 GB, slower)</option>
                             </optgroup>
                             <optgroup label="English only">
                                 <option value="tiny.en" ?selected=${this._whisperModel === 'tiny.en'}>Tiny English (75 MB, fastest)</option>
@@ -1334,6 +1349,16 @@ export class MainView extends LitElement {
                             }
                         </div>
                     </div>
+
+                    <label class="config-checkbox">
+                        <input type="checkbox" .checked=${this._localVisionEnabled} @change=${e => this._saveLocalVision(e.target.checked)} />
+                        <span class="config-checkbox-text">
+                            <span class="config-summary-title">Screen understanding</span>
+                            <span class="config-summary-description">
+                                Lets the model read your screen. Needs an extra vision file (657 MB for Qwen 4B); turn off to skip that download.
+                            </span>
+                        </span>
+                    </label>
                 </div>
             </details>
 

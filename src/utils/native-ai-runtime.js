@@ -91,6 +91,20 @@ const WHISPER_MODELS = {
         sha256: '6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208',
         englishOnly: false,
     },
+    // У turbo укороченный декодер (4 слоя против 32): точность уровня large при скорости medium.
+    // Квантованная q5_0 втрое меньше по весу и заметно экономит память при той же архитектуре.
+    'large-v3-turbo-q5_0': {
+        filename: 'ggml-large-v3-turbo-q5_0.bin',
+        url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
+        sha256: '394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2',
+        englishOnly: false,
+    },
+    'large-v3-turbo': {
+        filename: 'ggml-large-v3-turbo.bin',
+        url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin',
+        sha256: '1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69',
+        englishOnly: false,
+    },
 };
 
 /**
@@ -319,20 +333,27 @@ async function resolveHuggingFaceGguf(modelReference, signal) {
     };
 }
 
-async function ensureLlamaModel(modelReference, onModelProgress, onProjectorProgress, signal) {
+/**
+ * Загружает языковую модель и, если запрошено зрение, проектор к ней.
+ *
+ * Проектор весит сотни мегабайт (у Qwen3.5-4B — 657 МБ) и нужен только для разбора
+ * скриншотов. Раньше он качался всегда, даже когда зрение не используется, поэтому
+ * withVision позволяет от него отказаться.
+ */
+async function ensureLlamaModel(modelReference, onModelProgress, onProjectorProgress, signal, withVision = true) {
     if (path.isAbsolute(modelReference)) {
         if (!fs.existsSync(modelReference)) {
             throw new Error(`Language model does not exist: ${modelReference}`);
         }
 
         const projectorPath = path.join(path.dirname(modelReference), 'mmproj-BF16.gguf');
-        if (!fs.existsSync(projectorPath)) {
+        if (withVision && !fs.existsSync(projectorPath)) {
             throw new Error(`Multimodal projector does not exist: ${projectorPath}`);
         }
 
         return {
             modelPath: modelReference,
-            projectorPath,
+            projectorPath: withVision ? projectorPath : null,
         };
     }
 
@@ -346,6 +367,10 @@ async function ensureLlamaModel(modelReference, onModelProgress, onProjectorProg
         onProgress: onModelProgress,
         signal,
     });
+    if (!withVision) {
+        return { modelPath, projectorPath: null };
+    }
+
     const projectorPath = await installVerifiedFile({
         url: `https://huggingface.co/${encodePathParts(model.repository)}/resolve/main/${encodePathParts(model.projector.path)}`,
         destinationPath: path.join(repositoryDirectory, path.basename(model.projector.path)),

@@ -26,7 +26,6 @@
     "license": "GPL-3.0",
     "dependencies": {
         "@google/genai": "^1.2.0",
-        "@huggingface/transformers": "^3.8.1",
         "electron-squirrel-startup": "^1.0.1",
         "ws": "^8.21.0"
     },

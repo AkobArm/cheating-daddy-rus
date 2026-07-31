@@ -1,47 +1,37 @@
-// ── Shared Whisper/VAD audio-transcription pipeline ──
+// ── Общий аудио-конвейер: ресемплинг, VAD-энергия, распознавание ──
 //
-// Extracted from localai.js so multiple providers (localai.js, chatgptai.js, ...) can
-// reuse the same resampling, VAD energy calc, and Whisper transcription logic.
+// Распознавание выполняет whisper.cpp через ./whisperService (общий whisper-server).
+// Раньше здесь жил transformers.js/onnxruntime: на том же аудио он был примерно
+// вчетверо медленнее, грузился ~19 секунд вместо ~0.3 и требовал зависимостей
+// @huggingface/transformers + onnxruntime-node с распаковкой из ASAR.
 //
-// This module MUST NOT require ./gemini or ./localai (no circular deps). Any renderer
-// messaging is done via a `sendToRenderer` function passed in by the caller.
+// Этот модуль НЕ должен требовать ./gemini или ./localai (циклы зависимостей).
+// Общение с рендерером — через переданный колбэк sendToRenderer.
 
-// ── Whisper cache state ──
+const whisper = require('./whisperService');
 
-let whisperPipeline = null;
-let isWhisperLoading = false;
-
-// Whisper transcription language (ISO 639-1), derived from the configured Speech Language.
-// transformers.js does NOT auto-detect when omitted — it silently defaults to English, which
-// mis-transcribes/translates non-English speech. So we set it explicitly from the user's setting.
-let transcribeLanguage = 'en';
-
-// Audio resampling buffer
+// Буфер остатка ресемплинга
 let resampleRemainder = Buffer.alloc(0);
 
 function setTranscribeLanguage(language) {
-    transcribeLanguage =
-        String(language || 'en')
-            .split('-')[0]
-            .toLowerCase() || 'en';
+    whisper.setWhisperLanguage(language);
 }
 
 function resetResampleState() {
     resampleRemainder = Buffer.alloc(0);
 }
 
-// ── Audio Resampling (24kHz → 16kHz) ──
+// ── Ресемплинг 24 кГц → 16 кГц ──
 
 function resample24kTo16k(inputBuffer) {
-    // Combine with any leftover samples from previous call
+    // Приклеиваем остаток от предыдущего вызова
     const combined = Buffer.concat([resampleRemainder, inputBuffer]);
-    const inputSamples = Math.floor(combined.length / 2); // 16-bit = 2 bytes per sample
-    // Ratio: 16000/24000 = 2/3, so for every 3 input samples we produce 2 output samples
+    const inputSamples = Math.floor(combined.length / 2); // 16 бит = 2 байта на сэмпл
+    // Отношение 16000/24000 = 2/3: на каждые 3 входных сэмпла получаем 2 выходных
     const outputSamples = Math.floor((inputSamples * 2) / 3);
     const outputBuffer = Buffer.alloc(outputSamples * 2);
 
     for (let i = 0; i < outputSamples; i++) {
-        // Map output sample index to input position
         const srcPos = (i * 3) / 2;
         const srcIndex = Math.floor(srcPos);
         const frac = srcPos - srcIndex;
@@ -52,7 +42,6 @@ function resample24kTo16k(inputBuffer) {
         outputBuffer.writeInt16LE(Math.max(-32768, Math.min(32767, interpolated)), i * 2);
     }
 
-    // Store remainder for next call
     const consumedInputSamples = Math.ceil((outputSamples * 3) / 2);
     const remainderStart = consumedInputSamples * 2;
     resampleRemainder = remainderStart < combined.length ? combined.slice(remainderStart) : Buffer.alloc(0);
@@ -60,7 +49,7 @@ function resample24kTo16k(inputBuffer) {
     return outputBuffer;
 }
 
-// ── VAD (Voice Activity Detection) ──
+// ── VAD (детектор речи) ──
 
 function calculateRMS(pcm16Buffer) {
     const samples = pcm16Buffer.length / 2;
@@ -73,46 +62,6 @@ function calculateRMS(pcm16Buffer) {
     return Math.sqrt(sumSquares / samples);
 }
 
-// ── Whisper Transcription ──
-
-async function loadWhisperPipeline(modelName, sendToRenderer) {
-    if (whisperPipeline) return whisperPipeline;
-    if (isWhisperLoading) return null;
-
-    isWhisperLoading = true;
-    console.log('[LocalAI] Loading Whisper model:', modelName);
-    sendToRenderer('whisper-downloading', true);
-    sendToRenderer('update-status', 'Loading Whisper model (first time may take a while)...');
-
-    try {
-        // Dynamic import for ESM module
-        const { pipeline, env } = await import('@huggingface/transformers');
-        // Cache models outside the asar archive so ONNX runtime can load them
-        const { app } = require('electron');
-        const path = require('path');
-        env.cacheDir = path.join(app.getPath('userData'), 'whisper-models');
-        whisperPipeline = await pipeline('automatic-speech-recognition', modelName, {
-            dtype: 'q8',
-            device: 'auto',
-            // onnxruntime-node's CPU arena allocator (BFCArena) aborts during q8 Whisper inference
-            // on macOS/Apple Silicon, hard-crashing the whole app with a native EXC_BREAKPOINT
-            // (SIGTRAP in CPUAllocator::Alloc — uncatchable by try/catch). Disabling the arena and
-            // mem pattern sidesteps the abort with no transcription-quality loss.
-            session_options: { enableCpuMemArena: false, enableMemPattern: false },
-        });
-        console.log('[LocalAI] Whisper model loaded successfully');
-        sendToRenderer('whisper-downloading', false);
-        isWhisperLoading = false;
-        return whisperPipeline;
-    } catch (error) {
-        console.error('[LocalAI] Failed to load Whisper model:', error);
-        sendToRenderer('whisper-downloading', false);
-        sendToRenderer('update-status', 'Failed to load Whisper model: ' + error.message);
-        isWhisperLoading = false;
-        return null;
-    }
-}
-
 function pcm16ToFloat32(pcm16Buffer) {
     const samples = pcm16Buffer.length / 2;
     const float32 = new Float32Array(samples);
@@ -122,31 +71,44 @@ function pcm16ToFloat32(pcm16Buffer) {
     return float32;
 }
 
+// ── Распознавание ──
+
+/**
+ * Поднимает общий whisper-server. Имя сохранено историческим (раньше грузился
+ * transformers.js-пайплайн), чтобы не трогать вызывающий код.
+ */
+async function loadWhisperPipeline(modelName, sendToRenderer) {
+    try {
+        sendToRenderer('update-status', 'Starting Whisper...');
+        await whisper.startWhisper({
+            model: modelName,
+            language: whisper.getWhisperLanguage(),
+            sendToRenderer,
+            onProgress: (label, progress) => {
+                if (!progress?.expectedBytes) return;
+                const percentage = Math.floor((progress.downloadedBytes / progress.expectedBytes) * 100);
+                sendToRenderer('update-status', `Downloading ${label}... ${percentage}%`);
+            },
+        });
+        return true;
+    } catch (error) {
+        console.error('[Whisper] Не удалось запустить сервер:', error);
+        sendToRenderer('whisper-downloading', false);
+        sendToRenderer('update-status', 'Failed to start Whisper: ' + error.message);
+        return null;
+    }
+}
+
 async function transcribeAudio(pcm16kBuffer, sendToRenderer) {
-    if (!whisperPipeline) {
-        console.error('[LocalAI] Whisper pipeline not loaded');
+    if (!whisper.isWhisperRunning()) {
+        console.error('[Whisper] Сервер не запущен');
         return null;
     }
 
     try {
-        const float32Audio = pcm16ToFloat32(pcm16kBuffer);
-
-        // Whisper expects audio at 16kHz which is what we have. Language follows the configured
-        // Speech Language (was hardcoded 'en'). chunk_length_s lets it handle utterances >30s
-        // instead of silently truncating them.
-        const result = await whisperPipeline(float32Audio, {
-            sampling_rate: 16000,
-            language: transcribeLanguage,
-            task: 'transcribe',
-            chunk_length_s: 30,
-            stride_length_s: 5,
-        });
-
-        const text = result.text?.trim();
-        console.log('[LocalAI] Transcription:', text);
-        return text;
+        return await whisper.transcribePcm(pcm16kBuffer);
     } catch (error) {
-        console.error('[LocalAI] Transcription error:', error);
+        console.error('[Whisper] Ошибка распознавания:', error);
         return null;
     }
 }
@@ -157,8 +119,7 @@ function isNoiseTranscription(text) {
 }
 
 function resetWhisper() {
-    whisperPipeline = null;
-    isWhisperLoading = false;
+    whisper.stopWhisper();
 }
 
 module.exports = {

@@ -3,10 +3,9 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
 module.exports = {
     packagerConfig: {
-        // transformers.js (ChatGPT-mode Whisper) loads native onnxruntime binaries — they cannot run from inside the ASAR
-        asar: {
-            unpack: '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img}/**',
-        },
+        // Распаковка из ASAR больше не нужна: Whisper ушёл с transformers.js/onnxruntime
+        // на whisper.cpp — тот работает отдельным процессом и в архив не заглядывает
+        asar: true,
         extraResource: ['./src/assets/SystemAudioDump'],
         name: 'Cheating Daddy',
         icon: 'src/assets/logo',

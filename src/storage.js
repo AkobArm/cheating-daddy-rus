@@ -39,13 +39,15 @@ const DEFAULT_PREFERENCES = {
     // Local AI mode — native llama-server / whisper-server runtime
     localLlmModel: 'unsloth/Qwen3.5-4B-GGUF:Q4_K_M',
     whisperModel: 'tiny.en',
-    // ChatGPT mode — separate Whisper model id, this one is a transformers.js repo, not a whisper.cpp preset
+    // Vision costs a separate multimodal projector download (657 MB for Qwen3.5-4B)
+    localVisionEnabled: true,
+    // ChatGPT mode — own Whisper model, kept separate from the local mode's one
     chatgptModel: 'gpt-5.4-mini',
     chatgptReasoningEffort: 'medium', // 'minimal' | 'low' | 'medium' | 'high' — depth vs latency of answers
-    chatgptWhisperModel: 'Xenova/whisper-base',
-    // STT engine: 'local' (Whisper via transformers.js) | 'groq' (cloud whisper-large-v3-turbo, needs
-    // Groq key, fast+accurate) | 'realtime' (OpenAI realtime — needs an API org, usually unavailable
-    // for a plain ChatGPT subscription). Default to local.
+    chatgptWhisperModel: 'base',
+    // STT engine: 'local' (Whisper via whisper.cpp, GPU-accelerated) | 'groq' (cloud
+    // whisper-large-v3-turbo, needs Groq key) | 'realtime' (OpenAI realtime — needs an API org,
+    // usually unavailable for a plain ChatGPT subscription). Default to local.
     chatgptTranscription: 'local',
 };
 
@@ -332,7 +334,18 @@ function getPreferences() {
         'Xenova/whisper-small': 'small.en',
     };
 
+    // Режим ChatGPT ушёл с transformers.js на whisper.cpp: репозитории HuggingFace
+    // сменились ключами моделей whisper.cpp. Мультиязычные, потому что этот режим
+    // изначально распознавал не только английский.
+    const legacyChatgptWhisperModels = {
+        'Xenova/whisper-tiny': 'tiny',
+        'Xenova/whisper-base': 'base',
+        'Xenova/whisper-small': 'small',
+        'Xenova/whisper-medium': 'medium',
+    };
+
     preferences.whisperModel = legacyWhisperModels[preferences.whisperModel] || preferences.whisperModel;
+    preferences.chatgptWhisperModel = legacyChatgptWhisperModels[preferences.chatgptWhisperModel] || preferences.chatgptWhisperModel;
     return preferences;
 }
 

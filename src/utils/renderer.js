@@ -195,8 +195,10 @@ async function initializeLocal(profile = 'interview') {
     const whisperModel = prefs.whisperModel || 'tiny.en';
     const customPrompt = prefs.customPrompt || '';
     const language = prefs.selectedLanguage || 'en-US';
+    const withVision = prefs.localVisionEnabled !== false;
+    const audioMode = prefs.audioMode || 'speaker_only';
 
-    const success = await ipcRenderer.invoke('initialize-local', localLlmModel, whisperModel, profile, customPrompt, language);
+    const success = await ipcRenderer.invoke('initialize-local', localLlmModel, whisperModel, profile, customPrompt, language, withVision, audioMode);
     if (success) {
         cheatingDaddy.setStatus('Local AI Live');
         return true;

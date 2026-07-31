@@ -5,22 +5,24 @@ const { sendToRenderer, initializeNewSession, saveConversationTurn } = require('
 const {
     ensureNativeBinary,
     ensureLlamaModel,
-    ensureWhisperModel,
     getAvailablePort,
     getModelsDirectory,
     startNativeServer,
     stopNativeServer,
     waitForServer,
-    resolveWhisperModelForLanguage,
 } = require('./native-ai-runtime');
+// Распознавание вынесено в общий сервис: тот же whisper-server использует и режим ChatGPT
+const whisper = require('./whisperService');
+const { createAudioMixer } = require('./audioMixer');
+
+// Сводит микрофон и системный звук перед VAD; создаётся на сессию под её audioMode
+let audioMixer = null;
 
 let llamaProcess = null;
 let llamaBaseUrl = null;
 let llamaModel = null;
-let whisperProcess = null;
-let whisperBaseUrl = null;
-// Код языка для whisper ('ru', 'en', ...) — 'auto' означает автоопределение
-let whisperLanguage = 'en';
+// Проектор зрения опционален: без него модель отвечает только по тексту
+let visionAvailable = false;
 let localConversationHistory = [];
 let currentSystemPrompt = null;
 let isLocalActive = false;
@@ -42,30 +44,9 @@ const VAD_MODES = {
 };
 
 let vadConfig = VAD_MODES.VERY_AGGRESSIVE;
-let resampleRemainder = Buffer.alloc(0);
 
-function resample24kTo16k(inputBuffer) {
-    const combined = Buffer.concat([resampleRemainder, inputBuffer]);
-    const inputSamples = Math.floor(combined.length / 2);
-    const outputSamples = Math.floor((inputSamples * 2) / 3);
-    const outputBuffer = Buffer.alloc(outputSamples * 2);
-
-    for (let i = 0; i < outputSamples; i++) {
-        const sourcePosition = (i * 3) / 2;
-        const sourceIndex = Math.floor(sourcePosition);
-        const fraction = sourcePosition - sourceIndex;
-        const firstSample = combined.readInt16LE(sourceIndex * 2);
-        const secondSample = sourceIndex + 1 < inputSamples ? combined.readInt16LE((sourceIndex + 1) * 2) : firstSample;
-        const interpolated = Math.round(firstSample + fraction * (secondSample - firstSample));
-        outputBuffer.writeInt16LE(Math.max(-32768, Math.min(32767, interpolated)), i * 2);
-    }
-
-    const consumedInputSamples = Math.ceil((outputSamples * 3) / 2);
-    const remainderStart = consumedInputSamples * 2;
-    resampleRemainder = remainderStart < combined.length ? combined.slice(remainderStart) : Buffer.alloc(0);
-
-    return outputBuffer;
-}
+// Ресемплинг 24→16 кГц переехал в audioMixer: у каждого источника звука он свой,
+// иначе микрофон и колонки портят друг другу остаток между вызовами.
 
 function calculateRms(pcm16Buffer) {
     const samples = pcm16Buffer.length / 2;
@@ -114,54 +95,6 @@ function processVad(pcm16kBuffer) {
     }
 }
 
-function createWavBuffer(pcm16Buffer) {
-    const header = Buffer.alloc(44);
-    const byteRate = 16000 * 2;
-
-    header.write('RIFF', 0);
-    header.writeUInt32LE(36 + pcm16Buffer.length, 4);
-    header.write('WAVE', 8);
-    header.write('fmt ', 12);
-    header.writeUInt32LE(16, 16);
-    header.writeUInt16LE(1, 20);
-    header.writeUInt16LE(1, 22);
-    header.writeUInt32LE(16000, 24);
-    header.writeUInt32LE(byteRate, 28);
-    header.writeUInt16LE(2, 32);
-    header.writeUInt16LE(16, 34);
-    header.write('data', 36);
-    header.writeUInt32LE(pcm16Buffer.length, 40);
-
-    return Buffer.concat([header, pcm16Buffer]);
-}
-
-async function transcribeAudio(pcm16kBuffer) {
-    if (!whisperBaseUrl) {
-        throw new Error('Whisper server is not running');
-    }
-
-    const wavBuffer = createWavBuffer(pcm16kBuffer);
-    const formData = new FormData();
-    formData.append('file', new Blob([wavBuffer], { type: 'audio/wav' }), 'speech.wav');
-    formData.append('response_format', 'json');
-    formData.append('temperature', '0.0');
-    formData.append('language', whisperLanguage);
-
-    const response = await fetch(`${whisperBaseUrl}/inference`, {
-        method: 'POST',
-        body: formData,
-    });
-
-    if (!response.ok) {
-        throw new Error(`Whisper server returned HTTP ${response.status}`);
-    }
-
-    const result = await response.json();
-    const text = result.text?.trim() || '';
-    console.log('[LocalAI] Transcription:', text);
-    return text;
-}
-
 async function handleSpeechEnd(audioData) {
     if (!isLocalActive) return;
 
@@ -172,7 +105,7 @@ async function handleSpeechEnd(audioData) {
     }
 
     try {
-        const transcription = await transcribeAudio(audioData);
+        const transcription = await whisper.transcribePcm(audioData);
 
         if (!transcription || transcription.length < 2) {
             console.log('[LocalAI] Empty transcription, skipping');
@@ -345,7 +278,7 @@ function removeNewLlamaCacheEntries() {
     }
 }
 
-async function prepareNativeFiles(llamaModelReference, whisperModel, signal) {
+async function prepareNativeFiles(llamaModelReference, signal, withVision = true) {
     const binaryProgress = label => progress => {
         sendToRenderer('update-status', formatDownloadStatus(label, progress));
         sendDownloadProgress(label, progress);
@@ -354,24 +287,16 @@ async function prepareNativeFiles(llamaModelReference, whisperModel, signal) {
     sendDownloadProgress('Checking Llama runner');
     const llamaBinaryPath = await ensureNativeBinary('llama', binaryProgress('Llama runner'), signal);
 
-    sendDownloadProgress('Checking Whisper runner');
-    const whisperBinaryPath = await ensureNativeBinary('whisper', binaryProgress('Whisper runner'), signal);
-
-    let whisperModelPath;
-    sendToRenderer('whisper-downloading', true);
-    try {
-        sendDownloadProgress('Checking Whisper model');
-        whisperModelPath = await ensureWhisperModel(whisperModel, binaryProgress('Whisper model'), signal);
-    } finally {
-        sendToRenderer('whisper-downloading', false);
-    }
-
     sendDownloadProgress('Checking language model');
-    const llamaFiles = await ensureLlamaModel(llamaModelReference, binaryProgress('Language model'), binaryProgress('Vision model'), signal);
+    const llamaFiles = await ensureLlamaModel(
+        llamaModelReference,
+        binaryProgress('Language model'),
+        binaryProgress('Vision model'),
+        signal,
+        withVision
+    );
     return {
         llamaBinaryPath,
-        whisperBinaryPath,
-        whisperModelPath,
         llamaModelPath: llamaFiles.modelPath,
         projectorPath: llamaFiles.projectorPath,
     };
@@ -380,10 +305,7 @@ async function prepareNativeFiles(llamaModelReference, whisperModel, signal) {
 function validatePreparedNativeFiles(nativeFiles) {
     const requiredFiles = [
         ['Llama runner', nativeFiles.llamaBinaryPath],
-        ['Whisper runner', nativeFiles.whisperBinaryPath],
-        ['Whisper model', nativeFiles.whisperModelPath],
         ['Language model', nativeFiles.llamaModelPath],
-        ['Vision model', nativeFiles.projectorPath],
     ];
 
     for (const [label, filePath] of requiredFiles) {
@@ -391,43 +313,29 @@ function validatePreparedNativeFiles(nativeFiles) {
             throw new Error(`${label} path is invalid: ${filePath}`);
         }
     }
-}
 
-async function startWhisperServer(executablePath, modelPath) {
-    const port = await getAvailablePort();
-    whisperBaseUrl = `http://127.0.0.1:${port}`;
-    whisperProcess = startNativeServer({
-        executablePath,
-        arguments: ['-m', modelPath, '--host', '127.0.0.1', '--port', String(port)],
-        name: 'Whisper',
-    });
-
-    await waitForServer(`${whisperBaseUrl}/`, whisperProcess, 120000);
+    // Проектор нужен только для зрения: без него сессия просто теряет разбор скриншотов
+    if (nativeFiles.projectorPath && !fs.existsSync(nativeFiles.projectorPath)) {
+        throw new Error(`Vision model path is invalid: ${nativeFiles.projectorPath}`);
+    }
 }
 
 async function startLlamaServer(executablePath, modelPath, projectorPath) {
     if (!modelPath || !fs.existsSync(modelPath)) {
         throw new Error(`Language model path is invalid: ${modelPath}`);
     }
-    if (!projectorPath || !fs.existsSync(projectorPath)) {
-        throw new Error(`Vision model path is invalid: ${projectorPath}`);
-    }
 
     const port = await getAvailablePort();
-    const argumentsList = [
-        '--host',
-        '127.0.0.1',
-        '--port',
-        String(port),
-        '--alias',
-        'local',
-        '-c',
-        '8192',
-        '-m',
-        modelPath,
-        '--mmproj',
-        projectorPath,
-    ];
+    const argumentsList = ['--host', '127.0.0.1', '--port', String(port), '--alias', 'local', '-c', '8192', '-m', modelPath];
+
+    // Без проектора модель работает как текстовая — скриншоты просто не разбираются
+    if (projectorPath && fs.existsSync(projectorPath)) {
+        argumentsList.push('--mmproj', projectorPath);
+        visionAvailable = true;
+    } else {
+        visionAvailable = false;
+        console.log('[LocalAI] Проектор зрения не загружен — режим только текста');
+    }
 
     if (process.platform === 'darwin') {
         argumentsList.push('-ngl', '99');
@@ -443,17 +351,8 @@ async function startLlamaServer(executablePath, modelPath, projectorPath) {
     await waitForServer(`${llamaBaseUrl}/health`, llamaProcess, 30 * 60 * 1000);
 }
 
-async function initializeLocalSession(model, whisperModel, profile, customPrompt, language = 'en-US') {
-    // 'ru-RU' → 'ru': whisper ожидает двухбуквенный код, а не локаль
-    whisperLanguage = (language || 'en-US').split('-')[0].toLowerCase();
-    const effectiveWhisperModel = resolveWhisperModelForLanguage(whisperModel, whisperLanguage);
-
-    console.log('[LocalAI] Initializing native local session:', {
-        model,
-        whisperModel: effectiveWhisperModel,
-        language: whisperLanguage,
-        profile,
-    });
+async function initializeLocalSession(model, whisperModel, profile, customPrompt, language = 'en-US', withVision = true, audioMode = 'speaker_only') {
+    console.log('[LocalAI] Initializing native local session:', { model, whisperModel, language, profile });
     sendToRenderer('session-initializing', true);
 
     try {
@@ -463,12 +362,21 @@ async function initializeLocalSession(model, whisperModel, profile, customPrompt
         currentSystemPrompt = getSystemPrompt(profile, customPrompt, false);
         llamaModel = model;
 
-        const nativeFiles = await prepareNativeFiles(model, effectiveWhisperModel, initializationController.signal);
+        const nativeFiles = await prepareNativeFiles(model, initializationController.signal, withVision);
         validatePreparedNativeFiles(nativeFiles);
 
         sendToRenderer('update-status', 'Starting Whisper...');
         sendDownloadProgress('Starting Whisper');
-        await startWhisperServer(nativeFiles.whisperBinaryPath, nativeFiles.whisperModelPath);
+        await whisper.startWhisper({
+            model: whisperModel,
+            language,
+            sendToRenderer,
+            onProgress: (label, progress) => {
+                sendToRenderer('update-status', formatDownloadStatus(label, progress));
+                sendDownloadProgress(label, progress);
+            },
+            signal: initializationController.signal,
+        });
 
         sendToRenderer('update-status', 'Loading local language model...');
         sendDownloadProgress('Loading language model');
@@ -478,9 +386,13 @@ async function initializeLocalSession(model, whisperModel, profile, customPrompt
         speechBuffers = [];
         silenceFrameCount = 0;
         speechFrameCount = 0;
-        resampleRemainder = Buffer.alloc(0);
         localConversationHistory = [];
         latestScreenshot = null;
+        // Микшер должен знать, каких источников ждать, иначе будет простаивать в ожидании выключенного
+        audioMixer = createAudioMixer(processVad, {
+            expectMic: audioMode === 'mic_only' || audioMode === 'both',
+            expectSystem: audioMode !== 'mic_only',
+        });
 
         initializeNewSession(profile, customPrompt);
         isLocalActive = true;
@@ -508,12 +420,17 @@ async function initializeLocalSession(model, whisperModel, profile, customPrompt
     }
 }
 
-function processLocalAudio(monoChunk24k) {
-    if (!isLocalActive) return;
+/**
+ * @param {Buffer} monoChunk24k кусок PCM16 24 кГц
+ * @param {'system'|'mic'} source откуда пришёл звук — микрофон и колонки идут разными IPC-каналами
+ */
+function processLocalAudio(monoChunk24k, source = 'system') {
+    if (!isLocalActive || !audioMixer) return;
 
-    const pcm16k = resample24kTo16k(monoChunk24k);
-    if (pcm16k.length > 0) {
-        processVad(pcm16k);
+    if (source === 'mic') {
+        audioMixer.pushMic(monoChunk24k);
+    } else {
+        audioMixer.pushSystem(monoChunk24k);
     }
 }
 
@@ -522,24 +439,24 @@ function closeLocalSession() {
     initializationController?.abort();
     initializationController = null;
     stopNativeServer(llamaProcess);
-    stopNativeServer(whisperProcess);
+    whisper.stopWhisper();
     llamaProcess = null;
-    whisperProcess = null;
     llamaBaseUrl = null;
-    whisperBaseUrl = null;
     llamaModel = null;
+    visionAvailable = false;
+    audioMixer = null;
     isSpeaking = false;
     speechBuffers = [];
     silenceFrameCount = 0;
     speechFrameCount = 0;
-    resampleRemainder = Buffer.alloc(0);
     localConversationHistory = [];
     currentSystemPrompt = null;
     latestScreenshot = null;
 }
 
 function setLatestScreenshot(base64Data) {
-    latestScreenshot = base64Data;
+    // Без проектора кадр приложить некуда — не копим его в памяти
+    latestScreenshot = visionAvailable ? base64Data : null;
 }
 
 async function cancelLocalInitialization() {
@@ -549,7 +466,7 @@ async function cancelLocalInitialization() {
 
     initializationController.abort();
     stopNativeServer(llamaProcess);
-    stopNativeServer(whisperProcess);
+    whisper.stopWhisper();
     await new Promise(resolve => setTimeout(resolve, 300));
     removeNewLlamaCacheEntries();
     sendToRenderer('local-ai-download-progress', { active: false });
@@ -577,6 +494,10 @@ async function sendLocalText(text) {
 async function sendLocalImage(base64Data, prompt) {
     if (!isLocalActive || !llamaProcess) {
         return { success: false, error: 'No active local session' };
+    }
+    if (!visionAvailable) {
+        // Молча отправить картинку в текстовую модель нельзя: она ответит выдумкой
+        return { success: false, error: 'Vision is disabled — enable it in Local AI settings to analyse screenshots' };
     }
 
     const userMessage = {

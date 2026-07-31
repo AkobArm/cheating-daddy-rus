@@ -929,9 +929,10 @@ async function startMacOSAudioCapture(geminiSessionRef) {
             if (currentProviderMode === 'cloud') {
                 sendCloudAudio(monoChunk);
             } else if (currentProviderMode === 'local') {
-                getLocalAi().processLocalAudio(monoChunk);
+                // SystemAudioDump — это звук колонок, микрофон приходит отдельным каналом
+                getLocalAi().processLocalAudio(monoChunk, 'system');
             } else if (currentProviderMode === 'chatgpt') {
-                getChatGptAi().processChatGPTAudio(monoChunk);
+                getChatGptAi().processChatGPTAudio(monoChunk, 'system');
             } else {
                 const base64Data = monoChunk.toString('base64');
                 sendAudioToGemini(base64Data, geminiSessionRef);
@@ -1091,14 +1092,25 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         return false;
     });
 
-    ipcMain.handle('initialize-local', async (event, localLlmModel, whisperModel, profile, customPrompt, language = 'en-US') => {
-        currentProviderMode = 'local';
-        const success = await getLocalAi().initializeLocalSession(localLlmModel, whisperModel, profile, customPrompt, language);
-        if (!success) {
-            currentProviderMode = 'byok';
+    ipcMain.handle(
+        'initialize-local',
+        async (event, localLlmModel, whisperModel, profile, customPrompt, language = 'en-US', withVision = true, audioMode = 'speaker_only') => {
+            currentProviderMode = 'local';
+            const success = await getLocalAi().initializeLocalSession(
+                localLlmModel,
+                whisperModel,
+                profile,
+                customPrompt,
+                language,
+                withVision,
+                audioMode
+            );
+            if (!success) {
+                currentProviderMode = 'byok';
+            }
+            return success;
         }
-        return success;
-    });
+    );
 
     ipcMain.handle('initialize-chatgpt', async (event, profile, customPrompt, language = 'ru-RU', model = 'gpt-5.4-mini') => {
         currentProviderMode = 'chatgpt';
@@ -1131,7 +1143,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         if (currentProviderMode === 'local') {
             try {
                 const pcmBuffer = Buffer.from(data, 'base64');
-                getLocalAi().processLocalAudio(pcmBuffer);
+                getLocalAi().processLocalAudio(pcmBuffer, 'system');
                 return { success: true };
             } catch (error) {
                 console.error('Error sending local audio:', error);
@@ -1141,7 +1153,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         if (currentProviderMode === 'chatgpt') {
             try {
                 const pcmBuffer = Buffer.from(data, 'base64');
-                getChatGptAi().processChatGPTAudio(pcmBuffer);
+                getChatGptAi().processChatGPTAudio(pcmBuffer, 'system');
                 return { success: true };
             } catch (error) {
                 console.error('Error sending chatgpt audio:', error);
@@ -1176,7 +1188,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         if (currentProviderMode === 'local') {
             try {
                 const pcmBuffer = Buffer.from(data, 'base64');
-                getLocalAi().processLocalAudio(pcmBuffer);
+                getLocalAi().processLocalAudio(pcmBuffer, 'mic');
                 return { success: true };
             } catch (error) {
                 console.error('Error sending local mic audio:', error);
@@ -1186,7 +1198,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         if (currentProviderMode === 'chatgpt') {
             try {
                 const pcmBuffer = Buffer.from(data, 'base64');
-                getChatGptAi().processChatGPTAudio(pcmBuffer);
+                getChatGptAi().processChatGPTAudio(pcmBuffer, 'mic');
                 return { success: true };
             } catch (error) {
                 console.error('Error sending chatgpt mic audio:', error);

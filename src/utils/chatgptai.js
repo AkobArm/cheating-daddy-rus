@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { sendToRenderer, initializeNewSession, saveConversationTurn } = require('./gemini');
 const { getSystemPrompt } = require('./prompts');
 const transcription = require('./transcription');
+const { createAudioMixer } = require('./audioMixer');
 const realtime = require('./realtimeTranscription');
 const groq = require('./groqTranscription');
 const { ensureValidOpenAIAuth, refreshOpenAIAuth } = require('./openaiOAuth');
@@ -63,7 +64,13 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
             useRealtime: wantRealtime,
             reasoningEffort: prefs.chatgptReasoningEffort || 'medium',
             history: [], // [{ role: 'user' | 'assistant', text }] — conversation context for follow-ups
+            mixer: null,
         };
+        const audioMode = prefs.audioMode || 'speaker_only';
+        session.mixer = createAudioMixer(processMixedFrame, {
+            expectMic: audioMode === 'mic_only' || audioMode === 'both',
+            expectSystem: audioMode !== 'mic_only',
+        });
         isGenerating = false;
         pendingTranscription = null;
         initializeNewSession(profile, customPrompt);
@@ -72,8 +79,8 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
         // Load Whisper unless transcription is fully cloud (Groq) — keep it for local/realtime-fallback.
         if (sttEngine !== 'groq') {
             transcription.setTranscribeLanguage(language);
-            // Deliberately not `whisperModel` — that one holds a whisper.cpp preset for the native local mode
-            const whisperModel = prefs.chatgptWhisperModel || 'Xenova/whisper-base';
+            // Deliberately not `whisperModel` — that one belongs to the native local mode and is set independently
+            const whisperModel = prefs.chatgptWhisperModel || 'base';
             await transcription.loadWhisperPipeline(whisperModel, sendToRenderer);
         }
 
@@ -107,7 +114,11 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
     }
 }
 
-function processChatGPTAudio(monoChunk24k) {
+/**
+ * @param {Buffer} monoChunk24k кусок PCM16 24 кГц
+ * @param {'system'|'mic'} source микрофон и системный звук приходят разными IPC-каналами
+ */
+function processChatGPTAudio(monoChunk24k, source = 'system') {
     if (!session) {
         return;
     }
@@ -116,7 +127,19 @@ function processChatGPTAudio(monoChunk24k) {
         realtime.appendAudio(monoChunk24k);
         return;
     }
-    const pcm16k = transcription.resample24kTo16k(monoChunk24k);
+    if (!session.mixer) {
+        return;
+    }
+    // Сведение двух источников идёт до VAD: иначе они чередуются кусками и рвут фразы
+    if (source === 'mic') {
+        session.mixer.pushMic(monoChunk24k);
+    } else {
+        session.mixer.pushSystem(monoChunk24k);
+    }
+}
+
+function processMixedFrame(pcm16k) {
+    if (!session) return;
     const rms = transcription.calculateRMS(pcm16k);
     session.audioBuffer.push(pcm16k);
 
