@@ -72,7 +72,8 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
         // Load Whisper unless transcription is fully cloud (Groq) — keep it for local/realtime-fallback.
         if (sttEngine !== 'groq') {
             transcription.setTranscribeLanguage(language);
-            const whisperModel = prefs.whisperModel || 'Xenova/whisper-base';
+            // Deliberately not `whisperModel` — that one holds a whisper.cpp preset for the native local mode
+            const whisperModel = prefs.chatgptWhisperModel || 'Xenova/whisper-base';
             await transcription.loadWhisperPipeline(whisperModel, sendToRenderer);
         }
 

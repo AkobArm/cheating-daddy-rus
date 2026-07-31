@@ -3,6 +3,7 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
 module.exports = {
     packagerConfig: {
+        // transformers.js (ChatGPT-mode Whisper) loads native onnxruntime binaries — they cannot run from inside the ASAR
         asar: {
             unpack: '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img}/**',
         },
@@ -53,8 +54,8 @@ module.exports = {
                     genericName: 'AI Assistant',
                     description: 'AI assistant for interviews and learning',
                     categories: ['Development', 'Education'],
-                    icon: 'src/assets/logo.png'
-                }
+                    icon: 'src/assets/logo.png',
+                },
             },
         },
     ],

@@ -41,6 +41,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
     stopMacOSAudioCapture();
+    require('./utils/localai').closeLocalSession();
 });
 
 app.on('activate', () => {

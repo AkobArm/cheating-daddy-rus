@@ -192,7 +192,7 @@ export class CustomizeView extends LitElement {
         chatgptModel: { type: String },
         chatgptReasoningEffort: { type: String },
         chatgptTranscription: { type: String },
-        whisperModel: { type: String },
+        chatgptWhisperModel: { type: String },
         onProfileChange: { type: Function },
         onLanguageChange: { type: Function },
         onImageQualityChange: { type: Function },
@@ -235,7 +235,7 @@ export class CustomizeView extends LitElement {
         this.chatgptModel = 'gpt-5.4-mini';
         this.chatgptReasoningEffort = 'medium';
         this.chatgptTranscription = 'local';
-        this.whisperModel = 'Xenova/whisper-base';
+        this.chatgptWhisperModel = 'Xenova/whisper-base';
         this._loadFromStorage();
     }
 
@@ -260,7 +260,7 @@ export class CustomizeView extends LitElement {
             this.chatgptModel = prefs.chatgptModel ?? 'gpt-5.4-mini';
             this.chatgptReasoningEffort = prefs.chatgptReasoningEffort ?? 'medium';
             this.chatgptTranscription = prefs.chatgptTranscription ?? 'local';
-            this.whisperModel = prefs.whisperModel ?? 'Xenova/whisper-base';
+            this.chatgptWhisperModel = prefs.chatgptWhisperModel ?? 'Xenova/whisper-base';
             this.openaiOauthStatus = oauthStatus || this.openaiOauthStatus;
             if (oauthAuth?.expiresAt) {
                 this.openaiOauthStatus = {
@@ -520,8 +520,8 @@ export class CustomizeView extends LitElement {
     }
 
     async handleWhisperModelSelect(e) {
-        this.whisperModel = e.target.value;
-        await cheatingDaddy.storage.updatePreference('whisperModel', this.whisperModel);
+        this.chatgptWhisperModel = e.target.value;
+        await cheatingDaddy.storage.updatePreference('chatgptWhisperModel', this.chatgptWhisperModel);
         this.requestUpdate();
     }
 
@@ -750,9 +750,13 @@ export class CustomizeView extends LitElement {
                             <option value="both">Both Speaker and Microphone</option>
                         </select>
                     </div>
-                    ${this.audioMode !== 'speaker_only'
-                        ? html` <div class="warning-callout">May cause unexpected behavior. Only change this if you know what you're doing.</div> `
-                        : ''}
+                    ${
+                        this.audioMode !== 'speaker_only'
+                            ? html`
+                                  <div class="warning-callout">May cause unexpected behavior. Only change this if you know what you're doing.</div>
+                              `
+                            : ''
+                    }
                     <div class="form-group">
                         <label class="form-label">Image Quality</label>
                         <select class="control" .value=${this.selectedImageQuality} @change=${this.handleImageQualitySelect}>
@@ -776,7 +780,9 @@ export class CustomizeView extends LitElement {
                         <select class="control" .value=${this.selectedLanguage} @change=${this.handleLanguageSelect}>
                             ${this.getLanguages().map(
                                 language =>
-                                    html`<option value=${language.value} ?selected=${language.value === this.selectedLanguage}>${language.name}</option>`
+                                    html`<option value=${language.value} ?selected=${language.value === this.selectedLanguage}>
+                                        ${language.name}
+                                    </option>`
                             )}
                         </select>
                     </div>
@@ -853,16 +859,18 @@ export class CustomizeView extends LitElement {
                     <div class="form-group vertical">
                         <label class="form-label">Status</label>
                         <div class="status ${status.connected ? (status.expired ? 'error' : 'success') : ''}">
-                            ${status.connected
-                                ? html`
-                                      <div>
-                                          ${status.accountLabel}${status.accountEmail
-                                              ? html` <span class="muted">(${status.accountEmail})</span>`
-                                              : ''}
-                                      </div>
-                                      <div class="muted">Expires: ${expiresText}${status.expired ? ' (expired)' : ''}</div>
-                                  `
-                                : html`Not connected`}
+                            ${
+                                status.connected
+                                    ? html`
+                                          <div>
+                                              ${status.accountLabel}${
+                                              status.accountEmail ? html` <span class="muted">(${status.accountEmail})</span>` : ''
+                                          }
+                                          </div>
+                                          <div class="muted">Expires: ${expiresText}${status.expired ? ' (expired)' : ''}</div>
+                                      `
+                                    : html`Not connected`
+                            }
                         </div>
                     </div>
 
@@ -884,7 +892,9 @@ export class CustomizeView extends LitElement {
                             <option value="medium">medium (balanced)</option>
                             <option value="high">high (deepest, slowest)</option>
                         </select>
-                        <div class="form-help">How hard the model thinks before answering. Higher = deeper but slower. Applies to the next session.</div>
+                        <div class="form-help">
+                            How hard the model thinks before answering. Higher = deeper but slower. Applies to the next session.
+                        </div>
                     </div>
 
                     <div class="form-group vertical">
@@ -894,29 +904,27 @@ export class CustomizeView extends LitElement {
                             <option value="groq">Groq whisper-large-v3-turbo (fast + accurate, needs Groq key)</option>
                         </select>
                         <div class="form-help">
-                            Groq is the most accurate for Russian/terms and very fast, but needs a Groq API key (set it on the main
-                            screen). Local runs offline. Applies to the next session.
+                            Groq is the most accurate for Russian/terms and very fast, but needs a Groq API key (set it on the main screen). Local
+                            runs offline. Applies to the next session.
                         </div>
                     </div>
 
                     <div class="form-group vertical">
                         <label class="form-label">Transcription model (local Whisper)</label>
-                        <select class="control" .value=${this.whisperModel} @change=${this.handleWhisperModelSelect}>
+                        <select class="control" .value=${this.chatgptWhisperModel} @change=${this.handleWhisperModelSelect}>
                             <option value="Xenova/whisper-tiny">tiny (fastest, weakest)</option>
                             <option value="Xenova/whisper-base">base (fast)</option>
                             <option value="Xenova/whisper-small">small (better Russian)</option>
                             <option value="Xenova/whisper-medium">medium (best, slow, large download)</option>
                         </select>
-                        <div class="form-help">Local speech-to-text model. Bigger = more accurate (esp. Russian/terms), slower. First use downloads the model. Applies to the next session.</div>
+                        <div class="form-help">
+                            Local speech-to-text model. Bigger = more accurate (esp. Russian/terms), slower. First use downloads the model. Applies to
+                            the next session.
+                        </div>
                     </div>
 
                     <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;">
-                        <button
-                            class="control"
-                            style="width:auto;"
-                            @click=${this._connectOpenAI}
-                            ?disabled=${this.isOpenaiOauthConnecting}
-                        >
+                        <button class="control" style="width:auto;" @click=${this._connectOpenAI} ?disabled=${this.isOpenaiOauthConnecting}>
                             ${this.isOpenaiOauthConnecting ? 'Opening browser...' : 'Sign in with Browser'}
                         </button>
                         <button class="danger-button" @click=${this._disconnectOpenAI} ?disabled=${!status.connected}>Disconnect</button>
@@ -926,11 +934,15 @@ export class CustomizeView extends LitElement {
                         This opens your default browser for OpenAI sign-in, then returns to the app when authorization completes.
                     </div>
 
-                    ${this.openaiOauthMessage
-                        ? html`
-                              <div class="status ${this.openaiOauthMessageType === 'success' ? 'success' : 'error'}">${this.openaiOauthMessage}</div>
-                          `
-                        : ''}
+                    ${
+                        this.openaiOauthMessage
+                            ? html`
+                                  <div class="status ${this.openaiOauthMessageType === 'success' ? 'success' : 'error'}">
+                                      ${this.openaiOauthMessage}
+                                  </div>
+                              `
+                            : ''
+                    }
                 </div>
             </section>
         `;
@@ -978,12 +990,16 @@ export class CustomizeView extends LitElement {
                     </button>
                 </div>
                 <div class="form-help">Use export/import to move your local profile between devices without syncing through git.</div>
-                ${this.backupStatusMessage
-                    ? html` <div class="status ${this.backupStatusType === 'success' ? 'success' : 'error'}">${this.backupStatusMessage}</div> `
-                    : ''}
-                ${this.clearStatusMessage
-                    ? html` <div class="status ${this.clearStatusType === 'success' ? 'success' : 'error'}">${this.clearStatusMessage}</div> `
-                    : ''}
+                ${
+                    this.backupStatusMessage
+                        ? html` <div class="status ${this.backupStatusType === 'success' ? 'success' : 'error'}">${this.backupStatusMessage}</div> `
+                        : ''
+                }
+                ${
+                    this.clearStatusMessage
+                        ? html` <div class="status ${this.clearStatusType === 'success' ? 'success' : 'error'}">${this.clearStatusMessage}</div> `
+                        : ''
+                }
             </section>
         `;
     }

@@ -184,13 +184,11 @@ async function initializeGemini(profile = 'interview', language = 'en-US') {
 
 async function initializeLocal(profile = 'interview') {
     const prefs = await storage.getPreferences();
-    const ollamaHost = prefs.ollamaHost || 'http://127.0.0.1:11434';
-    const ollamaModel = prefs.ollamaModel || 'llama3.1';
-    const whisperModel = prefs.whisperModel || 'Xenova/whisper-base';
+    const localLlmModel = prefs.localLlmModel || 'unsloth/Qwen3.5-4B-GGUF:Q4_K_M';
+    const whisperModel = prefs.whisperModel || 'tiny.en';
     const customPrompt = prefs.customPrompt || '';
-    const language = prefs.selectedLanguage || 'en-US';
 
-    const success = await ipcRenderer.invoke('initialize-local', ollamaHost, ollamaModel, whisperModel, profile, customPrompt, language);
+    const success = await ipcRenderer.invoke('initialize-local', localLlmModel, whisperModel, profile, customPrompt);
     if (success) {
         cheatingDaddy.setStatus('Local AI Live');
         return true;
@@ -198,6 +196,10 @@ async function initializeLocal(profile = 'interview') {
         cheatingDaddy.setStatus('error');
         return false;
     }
+}
+
+async function cancelLocalInitialization() {
+    return ipcRenderer.invoke('cancel-local-initialization');
 }
 
 async function initializeChatGPT(profile = 'interview') {
@@ -1131,6 +1133,7 @@ const cheatingDaddy = {
     initializeGemini,
     initializeCloud,
     initializeLocal,
+    cancelLocalInitialization,
     initializeChatGPT,
     startCapture,
     stopCapture,

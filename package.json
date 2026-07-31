@@ -1,14 +1,14 @@
 {
     "name": "cheating-daddy",
     "productName": "cheating-daddy",
-    "version": "0.7.0",
+    "version": "0.8.0",
     "description": "cheating daddy",
     "main": "src/index.js",
     "scripts": {
-        "start": "cheating-daddy-rus/node_modules/.bin/electron-forge start",
-        "package": "cheating-daddy-rus/node_modules/.bin/electron-forge package",
-        "make": "cheating-daddy-rus/node_modules/.bin/electron-forge make",
-        "publish": "cheating-daddy-rus/node_modules/.bin/electron-forge publish",
+        "start": "electron-forge start",
+        "package": "electron-forge package",
+        "make": "electron-forge make",
+        "publish": "electron-forge publish",
         "lint": "echo \"No linting configured\""
     },
     "keywords": [
@@ -27,7 +27,6 @@
         "@google/genai": "^1.2.0",
         "@huggingface/transformers": "^3.8.1",
         "electron-squirrel-startup": "^1.0.1",
-        "ollama": "^0.6.3",
         "ws": "^8.21.0"
     },
     "devDependencies": {

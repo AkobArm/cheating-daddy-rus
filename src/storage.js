@@ -10,6 +10,10 @@ const DEFAULT_CONFIG = {
     configVersion: CONFIG_VERSION,
     onboarded: false,
     layout: 'normal',
+    geminiLiveModel: 'gemini-3.1-flash-live-preview',
+    groqModel: 'qwen/qwen3.6-27b',
+    groqImageModel: 'qwen/qwen3.6-27b',
+    disableGroqThinking: true,
 };
 
 const DEFAULT_CREDENTIALS = {
@@ -32,11 +36,13 @@ const DEFAULT_PREFERENCES = {
     fontSize: 'medium',
     backgroundTransparency: 0.8,
     googleSearchEnabled: false,
-    ollamaHost: 'http://127.0.0.1:11434',
-    ollamaModel: 'llama3.1',
-    whisperModel: 'Xenova/whisper-base',
+    // Local AI mode — native llama-server / whisper-server runtime
+    localLlmModel: 'unsloth/Qwen3.5-4B-GGUF:Q4_K_M',
+    whisperModel: 'tiny.en',
+    // ChatGPT mode — separate Whisper model id, this one is a transformers.js repo, not a whisper.cpp preset
     chatgptModel: 'gpt-5.4-mini',
     chatgptReasoningEffort: 'medium', // 'minimal' | 'low' | 'medium' | 'high' — depth vs latency of answers
+    chatgptWhisperModel: 'Xenova/whisper-base',
     // STT engine: 'local' (Whisper via transformers.js) | 'groq' (cloud whisper-large-v3-turbo, needs
     // Groq key, fast+accurate) | 'realtime' (OpenAI realtime — needs an API org, usually unavailable
     // for a plain ChatGPT subscription). Default to local.
@@ -247,7 +253,8 @@ function initializeStorage() {
 // ============ CONFIG ============
 
 function getConfig() {
-    return readJsonFile(getConfigPath(), DEFAULT_CONFIG);
+    const saved = readJsonFile(getConfigPath(), {});
+    return { ...DEFAULT_CONFIG, ...saved };
 }
 
 function setConfig(config) {
@@ -318,7 +325,15 @@ function clearOpenaiOAuth() {
 
 function getPreferences() {
     const saved = readJsonFile(getPreferencesPath(), {});
-    return { ...DEFAULT_PREFERENCES, ...saved };
+    const preferences = { ...DEFAULT_PREFERENCES, ...saved };
+    const legacyWhisperModels = {
+        'Xenova/whisper-tiny': 'tiny.en',
+        'Xenova/whisper-base': 'base.en',
+        'Xenova/whisper-small': 'small.en',
+    };
+
+    preferences.whisperModel = legacyWhisperModels[preferences.whisperModel] || preferences.whisperModel;
+    return preferences;
 }
 
 function setPreferences(preferences) {
@@ -471,9 +486,6 @@ function getModelForToday() {
     const todayEntry = getTodayLimits();
     const groq = todayEntry.groq;
 
-    if (groq['qwen3-32b'].chars < groq['qwen3-32b'].limit) {
-        return 'qwen/qwen3-32b';
-    }
     if (groq['gpt-oss-120b'].chars < groq['gpt-oss-120b'].limit) {
         return 'openai/gpt-oss-120b';
     }
