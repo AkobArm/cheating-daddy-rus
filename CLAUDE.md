@@ -36,7 +36,7 @@ Prettier config (`.prettierrc`): 4-space indentation, 150 char width, semicolons
 
 **Preload** (`src/preload.js`) — minimal bridge. Note: context isolation is currently disabled (TODO to fix).
 
-### Key Modules (Main Process — `src/utils/`)
+### Key Modules (Main Process — `src/utils`)
 
 | File | Responsibility |
 |------|---------------|
@@ -47,11 +47,11 @@ Prettier config (`.prettierrc`): 4-space indentation, 150 char width, semicolons
 | `window.js` | Window creation (normal 1100x800, assistant 850x400), global shortcuts, keybind management |
 | `renderer.js` | Renderer-side utilities: storage API wrapper, screen/audio capture, resampling (24kHz→16kHz) |
 
-### UI Layer (`src/components/`)
+### UI Layer (`src/components`)
 
 Built with **Lit web components** (not React — migration planned). Lit is loaded from the bundled minified file `src/assets/lit-core-2.7.4.min.js`, not an npm dependency. Root: `src/components/app/CheatingDaddyApp.js` (app shell with sidebar + view routing) and `src/components/app/AppHeader.js`.
 
-Views in `src/components/views/`: MainView (API key setup), OnboardingView, CustomizeView (settings), AICustomizeView (provider config), AssistantView (live overlay), HistoryView, FeedbackView, HelpView. Shared styles in `sharedPageStyles.js`.
+Views in `src/components/views`: MainView (API key setup), OnboardingView, CustomizeView (settings), AICustomizeView (provider config), AssistantView (live overlay), HistoryView, FeedbackView, HelpView. Shared styles in `sharedPageStyles.js`.
 
 ### Storage (`src/storage.js`)
 
@@ -63,7 +63,7 @@ JSON file-based storage in platform config dirs (`~/Library/Application Support/
 Display Media → Web Audio API (24kHz) → resample to 16kHz → VAD → buffer → AI provider
 ```
 
-`src/audioUtils.js` — PCM↔WAV conversion, audio analysis, debug helpers. macOS uses `SystemAudioDump` native binary (in `src/assets/`) for system audio capture.
+`src/audioUtils.js` — PCM↔WAV conversion, audio analysis, debug helpers. macOS uses `SystemAudioDump` native binary (in `src/assets`) for system audio capture.
 
 ### IPC Communication
 
