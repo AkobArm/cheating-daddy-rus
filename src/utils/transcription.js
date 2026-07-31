@@ -77,12 +77,13 @@ function pcm16ToFloat32(pcm16Buffer) {
  * Поднимает общий whisper-server. Имя сохранено историческим (раньше грузился
  * transformers.js-пайплайн), чтобы не трогать вызывающий код.
  */
-async function loadWhisperPipeline(modelName, sendToRenderer) {
+async function loadWhisperPipeline(modelName, sendToRenderer, useVad = true) {
     try {
         sendToRenderer('update-status', 'Starting Whisper...');
         await whisper.startWhisper({
             model: modelName,
             language: whisper.getWhisperLanguage(),
+            useVad,
             sendToRenderer,
             onProgress: (label, progress) => {
                 if (!progress?.expectedBytes) return;

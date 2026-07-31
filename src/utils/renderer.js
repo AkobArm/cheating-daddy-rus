@@ -138,6 +138,13 @@ const oauth = {
     },
 };
 
+const sessions = {
+    /** Разбор беседы: считается один раз и сохраняется в сессии. */
+    async summarize(sessionId) {
+        return ipcRenderer.invoke('summarize-session', sessionId);
+    },
+};
+
 const models = {
     /** Список моделей ChatGPT для текущего аккаунта; main-процесс сам подставит запасной при сбое. */
     async listChatGpt() {
@@ -206,6 +213,10 @@ async function initializeLocal(profile = 'interview') {
         cheatingDaddy.setStatus('error');
         return false;
     }
+}
+
+async function regenerateAnswer() {
+    return ipcRenderer.invoke('regenerate-answer');
 }
 
 async function cancelLocalInitialization() {
@@ -1144,6 +1155,7 @@ const cheatingDaddy = {
     initializeCloud,
     initializeLocal,
     cancelLocalInitialization,
+    regenerateAnswer,
     initializeChatGPT,
     startCapture,
     stopCapture,
@@ -1158,6 +1170,9 @@ const cheatingDaddy = {
 
     // Models catalog API
     models,
+
+    // Session tools
+    sessions,
 
     // Theme API
     theme,

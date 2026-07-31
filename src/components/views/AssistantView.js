@@ -198,6 +198,21 @@ export class AssistantView extends LitElement {
             color: var(--text-primary);
         }
 
+        .regen-btn {
+            flex: 0 0 auto;
+            margin-right: 6px;
+        }
+
+        .regen-btn.regenerating svg {
+            animation: regen-spin 1s linear infinite;
+        }
+
+        @keyframes regen-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
         .nav-btn:disabled {
             opacity: 0.25;
             cursor: default;
@@ -319,6 +334,7 @@ export class AssistantView extends LitElement {
         onSendText: { type: Function },
         shouldAnimateResponse: { type: Boolean },
         isAnalyzing: { type: Boolean, state: true },
+        isRegenerating: { type: Boolean, state: true },
     };
 
     constructor() {
@@ -328,6 +344,7 @@ export class AssistantView extends LitElement {
         this.selectedProfile = 'interview';
         this.onSendText = () => {};
         this.isAnalyzing = false;
+        this.isRegenerating = false;
         this._animFrame = null;
     }
 
@@ -473,6 +490,18 @@ export class AssistantView extends LitElement {
             const message = textInput.value.trim();
             textInput.value = '';
             await this.onSendText(message);
+        }
+    }
+
+    async handleRegenerate() {
+        if (this.isRegenerating) return;
+        this.isRegenerating = true;
+        this.requestUpdate();
+        try {
+            await cheatingDaddy.regenerateAnswer();
+        } finally {
+            this.isRegenerating = false;
+            this.requestUpdate();
         }
     }
 
@@ -721,6 +750,27 @@ export class AssistantView extends LitElement {
             }
 
             <div class="input-bar">
+                <button
+                    class="nav-btn regen-btn ${this.isRegenerating ? 'regenerating' : ''}"
+                    @click=${this.handleRegenerate}
+                    ?disabled=${this.isRegenerating || !this.responses.length}
+                    title="Ask again — regenerate the last answer"
+                >
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    >
+                        <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                        <polyline points="21 3 21 9 15 9" />
+                    </svg>
+                </button>
                 <div class="input-bar-inner">
                     <input type="text" id="textInput" placeholder="Type a message..." @keydown=${this.handleTextKeydown} />
                 </div>

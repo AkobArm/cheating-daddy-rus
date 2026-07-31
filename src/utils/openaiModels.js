@@ -48,8 +48,44 @@ function buildHeaders(auth) {
     };
 }
 
+// Каталог меняется редко, а экран настроек может перерисоваться несколько раз подряд —
+// без кэша это лишние сетевые запросы на каждый ре-рендер.
+const CACHE_TTL_MS = 5 * 60 * 1000;
+let cache = null; // { models, fetchedAt }
+let inFlight = null; // общий промис, пока запрос ещё летит
+
+function getCachedModels() {
+    if (!cache) return null;
+    return Date.now() - cache.fetchedAt < CACHE_TTL_MS ? cache.models : null;
+}
+
+function clearModelsCache() {
+    cache = null;
+    inFlight = null;
+}
+
 /** Никогда не бросает: настройки должны открываться и без сети. */
-async function listChatGptModels() {
+async function listChatGptModels({ force = false } = {}) {
+    if (!force) {
+        const cached = getCachedModels();
+        if (cached) {
+            return cached;
+        }
+        // Два экземпляра настроек, созданные подряд, должны разделить один запрос
+        if (inFlight) {
+            return inFlight;
+        }
+    }
+
+    inFlight = fetchModels();
+    try {
+        return await inFlight;
+    } finally {
+        inFlight = null;
+    }
+}
+
+async function fetchModels() {
     try {
         const auth = await ensureValidOpenAIAuth();
         if (!auth || !auth.accessToken) {
@@ -71,6 +107,7 @@ async function listChatGptModels() {
         }
 
         console.log(`[Models] Каталог: ${models.map(m => m.slug).join(', ')}`);
+        cache = { models, fetchedAt: Date.now() };
         return models;
     } catch (error) {
         console.warn('[Models] Каталог недоступен:', error.message);
@@ -82,6 +119,7 @@ module.exports = {
     listChatGptModels,
     parseModelsResponse,
     fallbackModels,
+    clearModelsCache,
     MODELS_URL,
     CODEX_CLIENT_VERSION,
 };

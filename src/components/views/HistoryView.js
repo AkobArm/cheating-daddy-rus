@@ -129,6 +129,17 @@ export class HistoryView extends LitElement {
                 gap: 6px;
             }
 
+            .summary-body {
+                white-space: pre-wrap;
+                line-height: 1.55;
+            }
+
+            .summary-error {
+                margin-top: 8px;
+                color: var(--danger);
+                font-size: var(--font-size-xs);
+            }
+
             .tab-btn {
                 border: 1px solid var(--border);
                 border-radius: var(--radius-sm);
@@ -264,6 +275,8 @@ export class HistoryView extends LitElement {
         selectedSessionId: { type: String },
         loading: { type: Boolean },
         activeTab: { type: String },
+        summaryLoading: { type: Boolean },
+        summaryError: { type: String },
         searchQuery: { type: String },
     };
 
@@ -274,6 +287,8 @@ export class HistoryView extends LitElement {
         this.selectedSessionId = null;
         this.loading = true;
         this.activeTab = 'conversation';
+        this.summaryLoading = false;
+        this.summaryError = '';
         this.searchQuery = '';
         this.loadSessions();
     }
@@ -380,6 +395,46 @@ export class HistoryView extends LitElement {
         return messages;
     }
 
+    async requestSummary() {
+        if (this.summaryLoading || !this.selectedSessionId) return;
+        this.summaryLoading = true;
+        this.summaryError = '';
+        this.requestUpdate();
+
+        const result = await cheatingDaddy.sessions.summarize(this.selectedSessionId);
+        if (result?.success) {
+            // Кладём разбор в уже загруженную сессию, чтобы не перечитывать её с диска
+            this.selectedSession = { ...this.selectedSession, summary: result.summary };
+        } else {
+            this.summaryError = result?.error || 'Не удалось получить разбор';
+        }
+        this.summaryLoading = false;
+        this.requestUpdate();
+    }
+
+    renderSummaryTab() {
+        const summary = this.selectedSession?.summary;
+        if (summary) {
+            return html`
+                <div class="message-row">
+                    <div class="message">
+                        <div class="message-body summary-body">${summary}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        return html`
+            <div class="empty">
+                <div>Разбор беседы ещё не сделан.</div>
+                ${this.summaryError ? html`<div class="summary-error">${this.summaryError}</div>` : ''}
+                <button class="tab-btn" style="margin-top:12px;" ?disabled=${this.summaryLoading} @click=${this.requestSummary}>
+                    ${this.summaryLoading ? 'Разбираю…' : 'Разобрать беседу'}
+                </button>
+            </div>
+        `;
+    }
+
     renderTabContent() {
         if (!this.selectedSession) return html`<div class="empty">Select a session.</div>`;
 
@@ -396,6 +451,10 @@ export class HistoryView extends LitElement {
                     </div>
                 `
             );
+        }
+
+        if (this.activeTab === 'summary') {
+            return this.renderSummaryTab();
         }
 
         if (this.activeTab === 'screen') {
@@ -530,6 +589,14 @@ export class HistoryView extends LitElement {
                     }}
                 >
                     Screen (${screenCount})
+                </button>
+                <button
+                    class="tab-btn ${this.activeTab === 'summary' ? 'active' : ''}"
+                    @click=${() => {
+                        this.activeTab = 'summary';
+                    }}
+                >
+                    Summary
                 </button>
                 <button
                     class="tab-btn ${this.activeTab === 'context' ? 'active' : ''}"

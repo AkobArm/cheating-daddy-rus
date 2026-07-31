@@ -45,6 +45,8 @@ const DEFAULT_PREFERENCES = {
     chatgptModel: 'gpt-5.4-mini',
     chatgptReasoningEffort: 'medium', // 'minimal' | 'low' | 'medium' | 'high' — depth vs latency of answers
     chatgptWhisperModel: 'base',
+    // Silero VAD: whisper без него выдумывает фразы на фоновом шуме, и они уходят в модель как вопрос
+    speechDetectorEnabled: true,
     // Пауза, после которой реплика считается законченной. Короче — быстрее ответ, но фразу
     // рвёт на раздумьях; длиннее — ждём дольше, зато договариваешь спокойно.
     chatgptSilenceMs: 800,
@@ -540,6 +542,9 @@ function saveSession(sessionId, data) {
         // Conversation data
         conversationHistory: data.conversationHistory || existingSession?.conversationHistory || [],
         screenAnalysisHistory: data.screenAnalysisHistory || existingSession?.screenAnalysisHistory || [],
+        // Разбор беседы считается по запросу и сохраняется, чтобы не гонять модель повторно
+        summary: data.summary ?? existingSession?.summary ?? null,
+        summaryCreatedAt: data.summaryCreatedAt ?? existingSession?.summaryCreatedAt ?? null,
     };
     return writeJsonFile(sessionPath, sessionData);
 }

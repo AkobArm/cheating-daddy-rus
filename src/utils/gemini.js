@@ -1121,6 +1121,23 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         return success;
     });
 
+    ipcMain.handle('regenerate-answer', async () => {
+        try {
+            if (currentProviderMode === 'chatgpt') {
+                return { success: await getChatGptAi().regenerateLastAnswer() };
+            }
+            if (currentProviderMode === 'local') {
+                return { success: await getLocalAi().regenerateLastAnswer() };
+            }
+            // Gemini/Groq держат диалог на своей стороне — повторить тот же запрос нечем
+            sendToRenderer('update-status', 'Regenerate is available in ChatGPT and Local AI modes');
+            return { success: false, error: 'Not supported in this mode' };
+        } catch (error) {
+            console.error('Error regenerating answer:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     ipcMain.handle('cancel-local-initialization', async () => {
         const cancelled = await getLocalAi().cancelLocalInitialization();
         if (cancelled) {

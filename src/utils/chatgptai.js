@@ -69,6 +69,7 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
             history: [], // [{ role: 'user' | 'assistant', text }] — conversation context for follow-ups
             silenceFrames: Math.max(1, Math.round((prefs.chatgptSilenceMs ?? DEFAULT_SILENCE_FRAMES * FRAME_MS) / FRAME_MS)),
             historyLimit: prefs.chatgptHistoryTurns ?? DEFAULT_HISTORY_MESSAGES,
+            lastRequest: null, // последний запрос — для повторной генерации
             mixer: null,
         };
         const audioMode = prefs.audioMode || 'speaker_only';
@@ -86,7 +87,7 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
             transcription.setTranscribeLanguage(language);
             // Deliberately not `whisperModel` — that one belongs to the native local mode and is set independently
             const whisperModel = prefs.chatgptWhisperModel || 'base';
-            await transcription.loadWhisperPipeline(whisperModel, sendToRenderer);
+            await transcription.loadWhisperPipeline(whisperModel, sendToRenderer, prefs.speechDetectorEnabled !== false);
         }
 
         if (wantRealtime) {
@@ -334,6 +335,8 @@ async function streamResponses(content, retryOn401 = true) {
         const promptText = content.map(c => c.text || '[image]').join(' ');
         saveConversationTurn(promptText, fullText);
         if (session) {
+            // Запоминаем запрос целиком (вместе с картинкой), чтобы можно было переспросить
+            session.lastRequest = content;
             session.history.push({ role: 'user', text: promptText }, { role: 'assistant', text: fullText });
             if (session.history.length > session.historyLimit) {
                 session.history = session.history.slice(-session.historyLimit);
@@ -385,6 +388,94 @@ async function sendChatGPTText(text) {
     return drainGenerations();
 }
 
+/**
+ * Просит модель ответить заново на тот же вопрос.
+ *
+ * Предыдущую пару «вопрос-ответ» убираем из истории, иначе модель увидит свой прошлый
+ * ответ как данность и лишь перескажет его.
+ */
+async function regenerateLastAnswer() {
+    if (!session || !session.lastRequest) {
+        sendToRenderer('update-status', 'Nothing to regenerate yet');
+        return false;
+    }
+    if (isGenerating) {
+        sendToRenderer('update-status', 'Still answering — try again in a moment');
+        return false;
+    }
+
+    if (session.history.length >= 2) {
+        session.history = session.history.slice(0, -2);
+    }
+
+    isGenerating = true;
+    sendToRenderer('update-status', 'Regenerating...');
+    try {
+        await streamResponses(session.lastRequest);
+    } catch (error) {
+        sendToRenderer('update-status', 'ChatGPT error: ' + error.message);
+        return false;
+    } finally {
+        isGenerating = false;
+    }
+    if (session) {
+        sendToRenderer('update-status', 'Listening...');
+    }
+    return true;
+}
+
+/**
+ * Разовый запрос к ChatGPT вне активной сессии — для итогов беседы.
+ *
+ * Работает по той же подписке, но не трогает историю диалога и не стримит в оверлей:
+ * итоги нужны после разговора, когда сессия уже закрыта.
+ */
+async function askOneShot(instructions, userText, { model = 'gpt-5.4-mini', reasoningEffort = 'low' } = {}) {
+    const auth = await ensureValidOpenAIAuth();
+    if (!auth || !auth.accessToken) {
+        throw new Error('ChatGPT account not connected');
+    }
+
+    const response = await fetch(RESPONSES_URL, {
+        method: 'POST',
+        headers: buildHeaders(auth, crypto.randomUUID()),
+        body: buildBody(model, instructions, [{ type: 'input_text', text: userText }], [], reasoningEffort),
+    });
+
+    if (!response.ok) {
+        const details = await response.text().catch(() => '');
+        throw new Error(`ChatGPT error ${response.status}: ${details.slice(0, 200)}`);
+    }
+
+    // Ответ приходит потоком SSE даже для разового запроса — собираем целиком
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullText = '';
+
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            try {
+                const event = JSON.parse(trimmed.slice(5).trim());
+                if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+                    fullText += event.delta;
+                }
+            } catch {
+                // не JSON — пропускаем
+            }
+        }
+    }
+
+    return fullText.trim();
+}
+
 function closeChatGPTSession() {
     session?.mixer?.flush();
     realtime.stopRealtimeTranscription();
@@ -399,6 +490,8 @@ module.exports = {
     processChatGPTAudio,
     sendChatGPTText,
     sendChatGPTImage,
+    regenerateLastAnswer,
+    askOneShot,
     closeChatGPTSession,
     isChatGPTSessionActive,
     setLatestScreenshot,

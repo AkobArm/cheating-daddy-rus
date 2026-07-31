@@ -7,6 +7,7 @@ const { createWindow, updateGlobalShortcuts } = require('./utils/window');
 const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
 const { connectOpenAI, disconnectOpenAI, getOpenAIAuthStatus, ensureValidOpenAIAuth } = require('./utils/openaiOAuth');
 const { listChatGptModels } = require('./utils/openaiModels');
+const { summarizeSession } = require('./utils/sessionSummary');
 const storage = require('./storage');
 
 const geminiSessionRef = { current: null };
@@ -387,6 +388,23 @@ function setupGeneralIpcHandlers() {
     // Токены не покидают main-процесс: рендерер получает только готовый список моделей
     ipcMain.handle('get-chatgpt-models', async () => {
         return await listChatGptModels();
+    });
+
+    ipcMain.handle('summarize-session', async (event, sessionId) => {
+        const session = storage.getSession(sessionId);
+        if (!session) {
+            return { success: false, error: 'Сессия не найдена' };
+        }
+        // Готовый разбор возвращаем сразу — модель дважды звать незачем
+        if (session.summary) {
+            return { success: true, summary: session.summary, cached: true };
+        }
+
+        const result = await summarizeSession(session);
+        if (result.success) {
+            storage.saveSession(sessionId, { summary: result.summary, summaryCreatedAt: Date.now() });
+        }
+        return result;
     });
 
     ipcMain.on('update-keybinds', (event, newKeybinds) => {

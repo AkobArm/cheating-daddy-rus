@@ -23,6 +23,8 @@ let llamaBaseUrl = null;
 let llamaModel = null;
 // Проектор зрения опционален: без него модель отвечает только по тексту
 let visionAvailable = false;
+// Последняя реплика пользователя — для повторной генерации
+let lastUserRequest = null;
 let localConversationHistory = [];
 let currentSystemPrompt = null;
 let isLocalActive = false;
@@ -177,6 +179,8 @@ async function requestLlama(messages, onText) {
 }
 
 async function sendToLlama(transcription) {
+    // Запоминаем реплику, чтобы можно было переспросить по ней же
+    lastUserRequest = transcription.trim();
     localConversationHistory.push({
         role: 'user',
         content: transcription.trim(),
@@ -370,6 +374,7 @@ async function initializeLocalSession(model, whisperModel, profile, customPrompt
         await whisper.startWhisper({
             model: whisperModel,
             language,
+            useVad: require('../storage').getPreferences().speechDetectorEnabled !== false,
             sendToRenderer,
             onProgress: (label, progress) => {
                 sendToRenderer('update-status', formatDownloadStatus(label, progress));
@@ -446,6 +451,7 @@ function closeLocalSession() {
     llamaBaseUrl = null;
     llamaModel = null;
     visionAvailable = false;
+    lastUserRequest = null;
     audioMixer = null;
     isSpeaking = false;
     speechBuffers = [];
@@ -454,6 +460,25 @@ function closeLocalSession() {
     localConversationHistory = [];
     currentSystemPrompt = null;
     latestScreenshot = null;
+}
+
+/** Отвечает заново на ту же реплику: прошлую пару убираем, иначе модель перескажет свой ответ. */
+async function regenerateLastAnswer() {
+    if (!isLocalActive || !lastUserRequest) {
+        sendToRenderer('update-status', 'Nothing to regenerate yet');
+        return false;
+    }
+
+    // убираем предыдущие user+assistant
+    localConversationHistory = localConversationHistory.slice(0, -2);
+    sendToRenderer('update-status', 'Regenerating...');
+    try {
+        await sendToLlama(lastUserRequest);
+        return true;
+    } catch (error) {
+        sendToRenderer('update-status', 'Local AI error: ' + error.message);
+        return false;
+    }
 }
 
 function setLatestScreenshot(base64Data) {
@@ -557,4 +582,5 @@ module.exports = {
     sendLocalText,
     sendLocalImage,
     setLatestScreenshot,
+    regenerateLastAnswer,
 };

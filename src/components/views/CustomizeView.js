@@ -205,6 +205,7 @@ export class CustomizeView extends LitElement {
         chatgptWhisperModel: { type: String },
         chatgptSilenceMs: { type: Number },
         chatgptHistoryTurns: { type: Number },
+        speechDetectorEnabled: { type: Boolean },
         onProfileChange: { type: Function },
         onLanguageChange: { type: Function },
         onImageQualityChange: { type: Function },
@@ -250,10 +251,17 @@ export class CustomizeView extends LitElement {
         this.chatgptWhisperModel = 'base';
         this.chatgptSilenceMs = 800;
         this.chatgptHistoryTurns = 10;
+        this.speechDetectorEnabled = true;
         // До ответа каталога показываем запасной список, чтобы селект не был пустым
         this.chatgptModels = FALLBACK_CHATGPT_MODELS;
         this.chatgptModelsFromCatalog = false;
         this._loadFromStorage();
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        // Не в конструкторе: Lit пересоздаёт компонент при ре-рендере родителя,
+        // и запрос уходил бы повторно на каждое пересоздание
         this._loadChatgptModels();
     }
 
@@ -300,6 +308,7 @@ export class CustomizeView extends LitElement {
             this.chatgptWhisperModel = prefs.chatgptWhisperModel ?? 'base';
             this.chatgptSilenceMs = prefs.chatgptSilenceMs ?? 800;
             this.chatgptHistoryTurns = prefs.chatgptHistoryTurns ?? 10;
+            this.speechDetectorEnabled = prefs.speechDetectorEnabled !== false;
             this.openaiOauthStatus = oauthStatus || this.openaiOauthStatus;
             if (oauthAuth?.expiresAt) {
                 this.openaiOauthStatus = {
@@ -555,6 +564,12 @@ export class CustomizeView extends LitElement {
     async handleReasoningEffortSelect(e) {
         this.chatgptReasoningEffort = e.target.value;
         await cheatingDaddy.storage.updatePreference('chatgptReasoningEffort', this.chatgptReasoningEffort);
+        this.requestUpdate();
+    }
+
+    async handleSpeechDetectorToggle(e) {
+        this.speechDetectorEnabled = e.target.checked;
+        await cheatingDaddy.storage.updatePreference('speechDetectorEnabled', this.speechDetectorEnabled);
         this.requestUpdate();
     }
 
@@ -953,6 +968,24 @@ export class CustomizeView extends LitElement {
                         </select>
                         <div class="form-help">
                             How hard the model thinks before answering. Higher = deeper but slower. Applies to the next session.
+                        </div>
+                    </div>
+
+                    <div class="form-group vertical">
+                        <label class="form-label">Speech detector</label>
+                        <div class="toggle-row">
+                            <input
+                                type="checkbox"
+                                class="toggle-input"
+                                id="speechDetector"
+                                .checked=${this.speechDetectorEnabled}
+                                @change=${this.handleSpeechDetectorToggle}
+                            />
+                            <label class="toggle-label" for="speechDetector">Filter out non-speech audio (Silero VAD)</label>
+                        </div>
+                        <div class="form-help">
+                            Without it Whisper invents phrases from background noise — and those get sent to the model as your question. Adds a
+                            one-time 0.9 MB download. Applies to the next session.
                         </div>
                     </div>
 

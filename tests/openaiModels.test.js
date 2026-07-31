@@ -61,3 +61,72 @@ test('модели без priority не ломают сортировку', () =
         ['a', 'b']
     );
 });
+
+// ── Кэш каталога ──
+// Экран настроек может пересоздаваться, поэтому повторные вызовы не должны бить по сети.
+
+const { listChatGptModels, clearModelsCache } = require('../src/utils/openaiModels');
+const openaiOAuth = require('../src/utils/openaiOAuth');
+
+function stubNetwork(models) {
+    let calls = 0;
+    const originalFetch = global.fetch;
+    const originalAuth = openaiOAuth.ensureValidOpenAIAuth;
+
+    openaiOAuth.ensureValidOpenAIAuth = async () => ({ accessToken: 'test-token', accountId: 'acc' });
+    global.fetch = async () => {
+        calls += 1;
+        return { ok: true, status: 200, text: async () => JSON.stringify({ models }) };
+    };
+
+    return {
+        calls: () => calls,
+        restore() {
+            global.fetch = originalFetch;
+            openaiOAuth.ensureValidOpenAIAuth = originalAuth;
+        },
+    };
+}
+
+const CATALOG = [{ slug: 'gpt-5.6-luna', display_name: 'Luna', priority: 1, visibility: 'list' }];
+
+test('повторный вызов берётся из кэша, а не из сети', async () => {
+    clearModelsCache();
+    const net = stubNetwork(CATALOG);
+    try {
+        const first = await listChatGptModels();
+        const second = await listChatGptModels();
+        assert.strictEqual(net.calls(), 1, 'сеть должна быть задействована один раз');
+        assert.deepStrictEqual(first, second);
+    } finally {
+        net.restore();
+        clearModelsCache();
+    }
+});
+
+test('одновременные вызовы разделяют один запрос', async () => {
+    clearModelsCache();
+    const net = stubNetwork(CATALOG);
+    try {
+        const [a, b, c] = await Promise.all([listChatGptModels(), listChatGptModels(), listChatGptModels()]);
+        assert.strictEqual(net.calls(), 1, 'три параллельных вызова — один поход в сеть');
+        assert.deepStrictEqual(a, b);
+        assert.deepStrictEqual(b, c);
+    } finally {
+        net.restore();
+        clearModelsCache();
+    }
+});
+
+test('force обходит кэш', async () => {
+    clearModelsCache();
+    const net = stubNetwork(CATALOG);
+    try {
+        await listChatGptModels();
+        await listChatGptModels({ force: true });
+        assert.strictEqual(net.calls(), 2);
+    } finally {
+        net.restore();
+        clearModelsCache();
+    }
+});

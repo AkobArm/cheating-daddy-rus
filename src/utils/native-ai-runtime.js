@@ -107,6 +107,25 @@ const WHISPER_MODELS = {
     },
 };
 
+// Silero VAD для whisper-server. Без него whisper на фоновом шуме выдумывает фразы
+// («Продолжение следует...») — они уходят в модель как вопрос и запускают пустой ответ.
+const VAD_MODEL = {
+    filename: 'ggml-silero-v5.1.2.bin',
+    url: 'https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin',
+    sha256: '29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf',
+};
+
+async function ensureVadModel(onProgress, signal) {
+    return installVerifiedFile({
+        url: VAD_MODEL.url,
+        destinationPath: path.join(getModelsDirectory(), 'whisper', VAD_MODEL.filename),
+        sha256: VAD_MODEL.sha256,
+        executable: false,
+        onProgress,
+        signal,
+    });
+}
+
 /**
  * Подбирает модель, пригодную для языка распознавания.
  *
@@ -459,5 +478,7 @@ module.exports = {
     stopNativeServer,
     waitForServer,
     resolveWhisperModelForLanguage,
+    ensureVadModel,
     WHISPER_MODELS,
+    VAD_MODEL,
 };

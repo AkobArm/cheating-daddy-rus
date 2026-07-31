@@ -11,6 +11,7 @@
 const {
     ensureNativeBinary,
     ensureWhisperModel,
+    ensureVadModel,
     getAvailablePort,
     startNativeServer,
     stopNativeServer,
@@ -22,6 +23,7 @@ let whisperProcess = null;
 let whisperBaseUrl = null;
 let whisperLanguage = 'en';
 let activeModel = null;
+let activeVad = null;
 let startPromise = null;
 
 function isWhisperRunning() {
@@ -67,11 +69,11 @@ function createWavBuffer(pcm16Buffer) {
  * Повторный вызов с той же моделью — no-op: сервер общий, и перезапускать его при
  * переключении режимов незачем. Параллельные вызовы разделяют один промис.
  */
-async function startWhisper({ model = 'base', language = 'en-US', sendToRenderer = () => {}, onProgress = null, signal = null } = {}) {
+async function startWhisper({ model = 'base', language = 'en-US', useVad = true, sendToRenderer = () => {}, onProgress = null, signal = null } = {}) {
     setWhisperLanguage(language);
     const effectiveModel = resolveWhisperModelForLanguage(model, whisperLanguage);
 
-    if (isWhisperRunning() && activeModel === effectiveModel) {
+    if (isWhisperRunning() && activeModel === effectiveModel && activeVad === useVad) {
         return whisperBaseUrl;
     }
     if (startPromise) {
@@ -98,18 +100,23 @@ async function startWhisper({ model = 'base', language = 'en-US', sendToRenderer
 
         const port = await getAvailablePort();
         const baseUrl = `http://127.0.0.1:${port}`;
-        const child = startNativeServer({
-            executablePath: binaryPath,
-            arguments: ['-m', modelPath, '--host', '127.0.0.1', '--port', String(port)],
-            name: 'Whisper',
-        });
+        const args = ['-m', modelPath, '--host', '127.0.0.1', '--port', String(port)];
+
+        if (useVad) {
+            // Модель весит меньше мегабайта, поэтому тянем её молча вместе с основной
+            const vadModelPath = await ensureVadModel(progress('Speech detector'), signal);
+            args.push('--vad', '--vad-model', vadModelPath);
+        }
+
+        const child = startNativeServer({ executablePath: binaryPath, arguments: args, name: 'Whisper' });
 
         await waitForServer(`${baseUrl}/`, child, 120000);
 
         whisperProcess = child;
         whisperBaseUrl = baseUrl;
         activeModel = effectiveModel;
-        console.log(`[Whisper] Сервер готов: ${baseUrl}, модель ${effectiveModel}, язык ${whisperLanguage}`);
+        activeVad = useVad;
+        console.log(`[Whisper] Сервер готов: ${baseUrl}, модель ${effectiveModel}, язык ${whisperLanguage}, VAD ${useVad ? 'вкл' : 'выкл'}`);
         return baseUrl;
     })();
 
@@ -150,6 +157,7 @@ function stopWhisper() {
     whisperProcess = null;
     whisperBaseUrl = null;
     activeModel = null;
+    activeVad = null;
 }
 
 module.exports = {
