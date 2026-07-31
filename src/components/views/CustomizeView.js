@@ -203,6 +203,8 @@ export class CustomizeView extends LitElement {
         chatgptReasoningEffort: { type: String },
         chatgptTranscription: { type: String },
         chatgptWhisperModel: { type: String },
+        chatgptSilenceMs: { type: Number },
+        chatgptHistoryTurns: { type: Number },
         onProfileChange: { type: Function },
         onLanguageChange: { type: Function },
         onImageQualityChange: { type: Function },
@@ -245,7 +247,9 @@ export class CustomizeView extends LitElement {
         this.chatgptModel = 'gpt-5.4-mini';
         this.chatgptReasoningEffort = 'medium';
         this.chatgptTranscription = 'local';
-        this.chatgptWhisperModel = 'Xenova/whisper-base';
+        this.chatgptWhisperModel = 'base';
+        this.chatgptSilenceMs = 800;
+        this.chatgptHistoryTurns = 10;
         // До ответа каталога показываем запасной список, чтобы селект не был пустым
         this.chatgptModels = FALLBACK_CHATGPT_MODELS;
         this.chatgptModelsFromCatalog = false;
@@ -293,7 +297,9 @@ export class CustomizeView extends LitElement {
             this.chatgptModel = prefs.chatgptModel ?? 'gpt-5.4-mini';
             this.chatgptReasoningEffort = prefs.chatgptReasoningEffort ?? 'medium';
             this.chatgptTranscription = prefs.chatgptTranscription ?? 'local';
-            this.chatgptWhisperModel = prefs.chatgptWhisperModel ?? 'Xenova/whisper-base';
+            this.chatgptWhisperModel = prefs.chatgptWhisperModel ?? 'base';
+            this.chatgptSilenceMs = prefs.chatgptSilenceMs ?? 800;
+            this.chatgptHistoryTurns = prefs.chatgptHistoryTurns ?? 10;
             this.openaiOauthStatus = oauthStatus || this.openaiOauthStatus;
             if (oauthAuth?.expiresAt) {
                 this.openaiOauthStatus = {
@@ -549,6 +555,18 @@ export class CustomizeView extends LitElement {
     async handleReasoningEffortSelect(e) {
         this.chatgptReasoningEffort = e.target.value;
         await cheatingDaddy.storage.updatePreference('chatgptReasoningEffort', this.chatgptReasoningEffort);
+        this.requestUpdate();
+    }
+
+    async handleSilenceMsSelect(e) {
+        this.chatgptSilenceMs = Number(e.target.value);
+        await cheatingDaddy.storage.updatePreference('chatgptSilenceMs', this.chatgptSilenceMs);
+        this.requestUpdate();
+    }
+
+    async handleHistoryTurnsSelect(e) {
+        this.chatgptHistoryTurns = Number(e.target.value);
+        await cheatingDaddy.storage.updatePreference('chatgptHistoryTurns', this.chatgptHistoryTurns);
         this.requestUpdate();
     }
 
@@ -935,6 +953,33 @@ export class CustomizeView extends LitElement {
                         </select>
                         <div class="form-help">
                             How hard the model thinks before answering. Higher = deeper but slower. Applies to the next session.
+                        </div>
+                    </div>
+
+                    <div class="form-group vertical">
+                        <label class="form-label">End-of-speech pause</label>
+                        <select class="control" .value=${String(this.chatgptSilenceMs)} @change=${this.handleSilenceMsSelect}>
+                            <option value="500">0.5 s (fastest, may cut you off)</option>
+                            <option value="800">0.8 s (default)</option>
+                            <option value="1200">1.2 s (room to think)</option>
+                            <option value="1600">1.6 s (long pauses)</option>
+                        </select>
+                        <div class="form-help">
+                            How long a pause means you finished talking. Shorter = the answer starts sooner, but a mid-sentence pause can cut you off.
+                            Longer = you can think out loud without being interrupted. Applies to the next session.
+                        </div>
+                    </div>
+
+                    <div class="form-group vertical">
+                        <label class="form-label">Conversation context</label>
+                        <select class="control" .value=${String(this.chatgptHistoryTurns)} @change=${this.handleHistoryTurnsSelect}>
+                            <option value="4">4 messages (fastest)</option>
+                            <option value="10">10 messages (default)</option>
+                            <option value="20">20 messages (best memory)</option>
+                        </select>
+                        <div class="form-help">
+                            How much of the conversation is sent with each request. Less = faster replies, but the model forgets earlier turns.
+                            Applies to the next session.
                         </div>
                     </div>
 

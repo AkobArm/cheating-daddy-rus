@@ -45,6 +45,11 @@ const DEFAULT_PREFERENCES = {
     chatgptModel: 'gpt-5.4-mini',
     chatgptReasoningEffort: 'medium', // 'minimal' | 'low' | 'medium' | 'high' — depth vs latency of answers
     chatgptWhisperModel: 'base',
+    // Пауза, после которой реплика считается законченной. Короче — быстрее ответ, но фразу
+    // рвёт на раздумьях; длиннее — ждём дольше, зато договариваешь спокойно.
+    chatgptSilenceMs: 800,
+    // Сколько последних сообщений уходит в запрос. Больше контекста — дольше prefill в облаке.
+    chatgptHistoryTurns: 10,
     // STT engine: 'local' (Whisper via whisper.cpp, GPU-accelerated) | 'groq' (cloud
     // whisper-large-v3-turbo, needs Groq key) | 'realtime' (OpenAI realtime — needs an API org,
     // usually unavailable for a plain ChatGPT subscription). Default to local.

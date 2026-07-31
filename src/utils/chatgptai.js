@@ -11,10 +11,13 @@ const storage = require('../storage');
 const RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
 const ORIGINATOR = 'codex_cli_rs';
 
-// VAD constants. SILENCE_FRAMES * ~0.1s = silence we wait before treating speech as ended.
+// VAD constants. Кадр микшера — 100 мс, поэтому N кадров тишины = N * 100 мс.
 const SILENCE_RMS = 0.01;
-const SILENCE_FRAMES = 8; // ~0.8s (exp1: was 15 ≈ 1.5s) — faster endpointing on normal questions
-const MAX_HISTORY_MESSAGES = 10; // keep last N turns (user+assistant) as conversation context
+const FRAME_MS = 100;
+const DEFAULT_SILENCE_FRAMES = 8; // 0.8 с — настраивается через chatgptSilenceMs
+// Короткий всплеск громкости (щелчок, стук по столу) не должен считаться репликой и запускать ответ
+const MIN_SPEECH_FRAMES = 3; // 0.3 с реальной речи
+const DEFAULT_HISTORY_MESSAGES = 10; // keep last N turns (user+assistant) as conversation context
 
 let session = null; // { systemPrompt, model, sessionId, audioBuffer, speechFrames, silenceCount, isSpeaking }
 let latestScreenshot = null;
@@ -64,6 +67,8 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
             useRealtime: wantRealtime,
             reasoningEffort: prefs.chatgptReasoningEffort || 'medium',
             history: [], // [{ role: 'user' | 'assistant', text }] — conversation context for follow-ups
+            silenceFrames: Math.max(1, Math.round((prefs.chatgptSilenceMs ?? DEFAULT_SILENCE_FRAMES * FRAME_MS) / FRAME_MS)),
+            historyLimit: prefs.chatgptHistoryTurns ?? DEFAULT_HISTORY_MESSAGES,
             mixer: null,
         };
         const audioMode = prefs.audioMode || 'speaker_only';
@@ -152,7 +157,16 @@ function processMixedFrame(pcm16k) {
         session.speechFrames++;
     } else if (session.isSpeaking) {
         session.silenceCount++;
-        if (session.silenceCount >= SILENCE_FRAMES) {
+        if (session.silenceCount >= session.silenceFrames) {
+            // Считанного всплеска слишком мало для реплики — это шум, ждём дальше, а не запускаем ответ
+            if (session.speechFrames < MIN_SPEECH_FRAMES) {
+                session.isSpeaking = false;
+                session.silenceCount = 0;
+                session.speechFrames = 0;
+                session.audioBuffer = [];
+                return;
+            }
+
             const audio = Buffer.concat(session.audioBuffer);
             session.audioBuffer = [];
             session.isSpeaking = false;
@@ -160,7 +174,7 @@ function processMixedFrame(pcm16k) {
             session.speechFrames = 0;
             handleSpeechEnd(audio);
         }
-    } else if (session.audioBuffer.length > SILENCE_FRAMES) {
+    } else if (session.audioBuffer.length > session.silenceFrames) {
         session.audioBuffer.shift();
     }
 }
@@ -321,8 +335,8 @@ async function streamResponses(content, retryOn401 = true) {
         saveConversationTurn(promptText, fullText);
         if (session) {
             session.history.push({ role: 'user', text: promptText }, { role: 'assistant', text: fullText });
-            if (session.history.length > MAX_HISTORY_MESSAGES) {
-                session.history = session.history.slice(-MAX_HISTORY_MESSAGES);
+            if (session.history.length > session.historyLimit) {
+                session.history = session.history.slice(-session.historyLimit);
             }
         }
     }

@@ -518,24 +518,24 @@ export class HistoryView extends LitElement {
                 <button
                     class="tab-btn ${this.activeTab === 'conversation' ? 'active' : ''}"
                     @click=${() => {
-                    this.activeTab = 'conversation';
-                }}
+                        this.activeTab = 'conversation';
+                    }}
                 >
                     Conversation (${conversationCount})
                 </button>
                 <button
                     class="tab-btn ${this.activeTab === 'screen' ? 'active' : ''}"
                     @click=${() => {
-                    this.activeTab = 'screen';
-                }}
+                        this.activeTab = 'screen';
+                    }}
                 >
                     Screen (${screenCount})
                 </button>
                 <button
                     class="tab-btn ${this.activeTab === 'context' ? 'active' : ''}"
                     @click=${() => {
-                    this.activeTab = 'context';
-                }}
+                        this.activeTab = 'context';
+                    }}
                 >
                     Context
                 </button>

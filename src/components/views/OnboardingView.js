@@ -390,8 +390,8 @@ export class OnboardingView extends LitElement {
                         <button
                             class="btn-primary"
                             @click=${() => {
-                            this.currentSlide = 1;
-                        }}
+                                this.currentSlide = 1;
+                            }}
                         >
                             Continue
                         </button>
@@ -415,8 +415,8 @@ export class OnboardingView extends LitElement {
                     <button
                         class="btn-back"
                         @click=${() => {
-                        this.currentSlide = 0;
-                    }}
+                            this.currentSlide = 0;
+                        }}
                     >
                         Back
                     </button>
