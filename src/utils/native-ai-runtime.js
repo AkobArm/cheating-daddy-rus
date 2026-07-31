@@ -46,23 +46,76 @@ const BINARY_RELEASES = {
     },
 };
 
+// Модели с суффиксом .en понимают ТОЛЬКО английский: на другом языке они не распознают речь,
+// а переводят её на английский. Для не-английских языков нужны мультиязычные (без суффикса).
 const WHISPER_MODELS = {
     'tiny.en': {
         filename: 'ggml-tiny.en.bin',
         url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin',
         sha256: '921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f',
+        englishOnly: true,
     },
     'base.en': {
         filename: 'ggml-base.en.bin',
         url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin',
         sha256: 'a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002',
+        englishOnly: true,
     },
     'small.en': {
         filename: 'ggml-small.en.bin',
         url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
         sha256: 'c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d',
+        englishOnly: true,
+    },
+    tiny: {
+        filename: 'ggml-tiny.bin',
+        url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin',
+        sha256: 'be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21',
+        englishOnly: false,
+    },
+    base: {
+        filename: 'ggml-base.bin',
+        url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
+        sha256: '60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe',
+        englishOnly: false,
+    },
+    small: {
+        filename: 'ggml-small.bin',
+        url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin',
+        sha256: '1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b',
+        englishOnly: false,
+    },
+    medium: {
+        filename: 'ggml-medium.bin',
+        url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin',
+        sha256: '6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208',
+        englishOnly: false,
     },
 };
+
+/**
+ * Подбирает модель, пригодную для языка распознавания.
+ *
+ * Молча оставить .en-модель при русском языке нельзя: whisper не сообщает об ошибке,
+ * он просто выдаёт английский перевод вместо русского текста, и выглядит это как
+ * «распознавание работает, но врёт». Поэтому подменяем на мультиязычный аналог.
+ */
+function resolveWhisperModelForLanguage(modelName, languageCode) {
+    const model = WHISPER_MODELS[modelName];
+    const isEnglish = !languageCode || languageCode === 'auto' || languageCode.toLowerCase().startsWith('en');
+
+    if (!model || !model.englishOnly || isEnglish) {
+        return modelName;
+    }
+
+    const multilingual = modelName.replace(/\.en$/, '');
+    if (!WHISPER_MODELS[multilingual]) {
+        return modelName;
+    }
+
+    console.log(`[NativeRuntime] Язык "${languageCode}" не английский — вместо ${modelName} берём ${multilingual}`);
+    return multilingual;
+}
 
 function getPlatformReleases() {
     const platformReleases = BINARY_RELEASES[process.platform]?.[process.arch];
@@ -380,4 +433,6 @@ module.exports = {
     startNativeServer,
     stopNativeServer,
     waitForServer,
+    resolveWhisperModelForLanguage,
+    WHISPER_MODELS,
 };

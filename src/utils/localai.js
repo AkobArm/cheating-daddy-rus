@@ -11,6 +11,7 @@ const {
     startNativeServer,
     stopNativeServer,
     waitForServer,
+    resolveWhisperModelForLanguage,
 } = require('./native-ai-runtime');
 
 let llamaProcess = null;
@@ -18,6 +19,8 @@ let llamaBaseUrl = null;
 let llamaModel = null;
 let whisperProcess = null;
 let whisperBaseUrl = null;
+// Код языка для whisper ('ru', 'en', ...) — 'auto' означает автоопределение
+let whisperLanguage = 'en';
 let localConversationHistory = [];
 let currentSystemPrompt = null;
 let isLocalActive = false;
@@ -142,7 +145,7 @@ async function transcribeAudio(pcm16kBuffer) {
     formData.append('file', new Blob([wavBuffer], { type: 'audio/wav' }), 'speech.wav');
     formData.append('response_format', 'json');
     formData.append('temperature', '0.0');
-    formData.append('language', 'en');
+    formData.append('language', whisperLanguage);
 
     const response = await fetch(`${whisperBaseUrl}/inference`, {
         method: 'POST',
@@ -440,8 +443,17 @@ async function startLlamaServer(executablePath, modelPath, projectorPath) {
     await waitForServer(`${llamaBaseUrl}/health`, llamaProcess, 30 * 60 * 1000);
 }
 
-async function initializeLocalSession(model, whisperModel, profile, customPrompt) {
-    console.log('[LocalAI] Initializing native local session:', { model, whisperModel, profile });
+async function initializeLocalSession(model, whisperModel, profile, customPrompt, language = 'en-US') {
+    // 'ru-RU' → 'ru': whisper ожидает двухбуквенный код, а не локаль
+    whisperLanguage = (language || 'en-US').split('-')[0].toLowerCase();
+    const effectiveWhisperModel = resolveWhisperModelForLanguage(whisperModel, whisperLanguage);
+
+    console.log('[LocalAI] Initializing native local session:', {
+        model,
+        whisperModel: effectiveWhisperModel,
+        language: whisperLanguage,
+        profile,
+    });
     sendToRenderer('session-initializing', true);
 
     try {
@@ -451,7 +463,7 @@ async function initializeLocalSession(model, whisperModel, profile, customPrompt
         currentSystemPrompt = getSystemPrompt(profile, customPrompt, false);
         llamaModel = model;
 
-        const nativeFiles = await prepareNativeFiles(model, whisperModel, initializationController.signal);
+        const nativeFiles = await prepareNativeFiles(model, effectiveWhisperModel, initializationController.signal);
         validatePreparedNativeFiles(nativeFiles);
 
         sendToRenderer('update-status', 'Starting Whisper...');

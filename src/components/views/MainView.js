@@ -708,6 +708,7 @@ export class MainView extends LitElement {
         _localLlmModel: { state: true },
         _useCustomLocalLlmModel: { state: true },
         _whisperModel: { state: true },
+        _selectedLanguage: { state: true },
         _showLocalHelp: { state: true },
     };
 
@@ -737,6 +738,7 @@ export class MainView extends LitElement {
         this._localLlmModel = 'unsloth/Qwen3.5-4B-GGUF:Q4_K_M';
         this._useCustomLocalLlmModel = false;
         this._whisperModel = 'tiny.en';
+        this._selectedLanguage = 'en-US';
 
         this._animId = null;
         this._time = 0;
@@ -776,6 +778,7 @@ export class MainView extends LitElement {
             this._localLlmModel = prefs.localLlmModel || 'unsloth/Qwen3.5-4B-GGUF:Q4_K_M';
             this._useCustomLocalLlmModel = !LOCAL_LLM_PRESETS.some(preset => preset.value === this._localLlmModel);
             this._whisperModel = prefs.whisperModel || 'tiny.en';
+            this._selectedLanguage = prefs.selectedLanguage || 'en-US';
 
             this.requestUpdate();
         } catch (e) {
@@ -999,6 +1002,11 @@ export class MainView extends LitElement {
         this._whisperModel = val;
         await cheatingDaddy.storage.updatePreference('whisperModel', val);
         this.requestUpdate();
+    }
+
+    /** Выбрана .en-модель, а язык интерфейса не английский — распознавание молча съедет в перевод. */
+    _isEnglishOnlyWhisperMismatch() {
+        return this._whisperModel.endsWith('.en') && !(this._selectedLanguage || 'en-US').toLowerCase().startsWith('en');
     }
 
     _handleProfileChange(e) {
@@ -1299,11 +1307,27 @@ export class MainView extends LitElement {
                             ${this.whisperDownloading ? html`<div class="whisper-spinner"></div>` : ''}
                         </div>
                         <select .value=${this._whisperModel} @change=${e => this._saveWhisperModel(e.target.value)}>
-                            <option value="tiny.en" ?selected=${this._whisperModel === 'tiny.en'}>Tiny English (75 MB, fastest)</option>
-                            <option value="base.en" ?selected=${this._whisperModel === 'base.en'}>Base English (142 MB)</option>
-                            <option value="small.en" ?selected=${this._whisperModel === 'small.en'}>Small English (466 MB, most accurate)</option>
+                            <optgroup label="Multilingual (Russian and others)">
+                                <option value="tiny" ?selected=${this._whisperModel === 'tiny'}>Tiny (78 MB, fastest)</option>
+                                <option value="base" ?selected=${this._whisperModel === 'base'}>Base (148 MB)</option>
+                                <option value="small" ?selected=${this._whisperModel === 'small'}>Small (488 MB, more accurate)</option>
+                                <option value="medium" ?selected=${this._whisperModel === 'medium'}>Medium (1.5 GB, most accurate)</option>
+                            </optgroup>
+                            <optgroup label="English only">
+                                <option value="tiny.en" ?selected=${this._whisperModel === 'tiny.en'}>Tiny English (75 MB, fastest)</option>
+                                <option value="base.en" ?selected=${this._whisperModel === 'base.en'}>Base English (142 MB)</option>
+                                <option value="small.en" ?selected=${this._whisperModel === 'small.en'}>Small English (466 MB, most accurate)</option>
+                            </optgroup>
                         </select>
-                        <div class="form-hint">${this.whisperDownloading ? 'Downloading model...' : 'Downloaded automatically on first use'}</div>
+                        <div class="form-hint">
+                            ${
+                                this.whisperDownloading
+                                    ? 'Downloading model...'
+                                    : this._isEnglishOnlyWhisperMismatch()
+                                      ? 'English-only model with a non-English interface language — a multilingual model will be used instead'
+                                      : 'Downloaded automatically on first use'
+                            }
+                        </div>
                     </div>
                 </div>
             </details>

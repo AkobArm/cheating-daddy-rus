@@ -1,6 +1,14 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
 import { unifiedPageStyles } from './sharedPageStyles.js';
 
+// Показываем до ответа каталога и когда аккаунт не подключён.
+// Держать в синхроне с FALLBACK_SLUGS в src/utils/openaiModels.js.
+const FALLBACK_CHATGPT_MODELS = [
+    { slug: 'gpt-5.6-terra', displayName: 'gpt-5.6-terra' },
+    { slug: 'gpt-5.6-luna', displayName: 'gpt-5.6-luna' },
+    { slug: 'gpt-5.5', displayName: 'gpt-5.5' },
+];
+
 export class CustomizeView extends LitElement {
     static styles = [
         unifiedPageStyles,
@@ -190,6 +198,8 @@ export class CustomizeView extends LitElement {
         openaiOauthMessage: { type: String },
         openaiOauthMessageType: { type: String },
         chatgptModel: { type: String },
+        chatgptModels: { type: Array },
+        chatgptModelsFromCatalog: { type: Boolean },
         chatgptReasoningEffort: { type: String },
         chatgptTranscription: { type: String },
         chatgptWhisperModel: { type: String },
@@ -236,7 +246,30 @@ export class CustomizeView extends LitElement {
         this.chatgptReasoningEffort = 'medium';
         this.chatgptTranscription = 'local';
         this.chatgptWhisperModel = 'Xenova/whisper-base';
+        // До ответа каталога показываем запасной список, чтобы селект не был пустым
+        this.chatgptModels = FALLBACK_CHATGPT_MODELS;
+        this.chatgptModelsFromCatalog = false;
         this._loadFromStorage();
+        this._loadChatgptModels();
+    }
+
+    /** Каталог зависит от аккаунта, поэтому тянем его при каждом открытии настроек. */
+    async _loadChatgptModels() {
+        try {
+            const models = await cheatingDaddy.models.listChatGpt();
+            if (Array.isArray(models) && models.length > 0) {
+                this.chatgptModels = models;
+                this.chatgptModelsFromCatalog = true;
+                // Сохранённая модель могла исчезнуть из выдачи — иначе селект показал бы пустоту
+                if (!models.some(m => m.slug === this.chatgptModel)) {
+                    this.chatgptModel = models[0].slug;
+                    await cheatingDaddy.storage.updatePreference('chatgptModel', this.chatgptModel);
+                }
+                this.requestUpdate();
+            }
+        } catch (error) {
+            console.error('Не удалось получить список моделей:', error);
+        }
     }
 
     getThemes() {
@@ -864,8 +897,8 @@ export class CustomizeView extends LitElement {
                                     ? html`
                                           <div>
                                               ${status.accountLabel}${
-                                              status.accountEmail ? html` <span class="muted">(${status.accountEmail})</span>` : ''
-                                          }
+                                                  status.accountEmail ? html` <span class="muted">(${status.accountEmail})</span>` : ''
+                                              }
                                           </div>
                                           <div class="muted">Expires: ${expiresText}${status.expired ? ' (expired)' : ''}</div>
                                       `
@@ -877,11 +910,17 @@ export class CustomizeView extends LitElement {
                     <div class="form-group vertical">
                         <label class="form-label">Answer model</label>
                         <select class="control" .value=${this.chatgptModel} @change=${this.handleChatgptModelSelect}>
-                            <option value="gpt-5.5">gpt-5.5 (deepest, slowest)</option>
-                            <option value="gpt-5.4">gpt-5.4 (balanced)</option>
-                            <option value="gpt-5.4-mini">gpt-5.4-mini (fastest)</option>
+                            ${this.chatgptModels.map(
+                                m => html`<option value=${m.slug} ?selected=${this.chatgptModel === m.slug}>${m.displayName}</option>`
+                            )}
                         </select>
-                        <div class="form-help">Model used for answers. Bigger = more depth, slower. Applies to the next session.</div>
+                        <div class="form-help">
+                            ${
+                                this.chatgptModelsFromCatalog
+                                    ? 'Model list comes from your ChatGPT account. Applies to the next session.'
+                                    : 'Account not connected or catalog unavailable — showing the fallback list. Applies to the next session.'
+                            }
+                        </div>
                     </div>
 
                     <div class="form-group vertical">

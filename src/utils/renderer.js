@@ -138,6 +138,13 @@ const oauth = {
     },
 };
 
+const models = {
+    /** Список моделей ChatGPT для текущего аккаунта; main-процесс сам подставит запасной при сбое. */
+    async listChatGpt() {
+        return ipcRenderer.invoke('get-chatgpt-models');
+    },
+};
+
 // Cache for preferences to avoid async calls in hot paths
 let preferencesCache = null;
 
@@ -187,8 +194,9 @@ async function initializeLocal(profile = 'interview') {
     const localLlmModel = prefs.localLlmModel || 'unsloth/Qwen3.5-4B-GGUF:Q4_K_M';
     const whisperModel = prefs.whisperModel || 'tiny.en';
     const customPrompt = prefs.customPrompt || '';
+    const language = prefs.selectedLanguage || 'en-US';
 
-    const success = await ipcRenderer.invoke('initialize-local', localLlmModel, whisperModel, profile, customPrompt);
+    const success = await ipcRenderer.invoke('initialize-local', localLlmModel, whisperModel, profile, customPrompt, language);
     if (success) {
         cheatingDaddy.setStatus('Local AI Live');
         return true;
@@ -1145,6 +1153,9 @@ const cheatingDaddy = {
 
     // OAuth API
     oauth,
+
+    // Models catalog API
+    models,
 
     // Theme API
     theme,

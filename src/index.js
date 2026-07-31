@@ -6,6 +6,7 @@ const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron');
 const { createWindow, updateGlobalShortcuts } = require('./utils/window');
 const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
 const { connectOpenAI, disconnectOpenAI, getOpenAIAuthStatus, ensureValidOpenAIAuth } = require('./utils/openaiOAuth');
+const { listChatGptModels } = require('./utils/openaiModels');
 const storage = require('./storage');
 
 const geminiSessionRef = { current: null };
@@ -381,6 +382,11 @@ function setupGeneralIpcHandlers() {
     ipcMain.handle('oauth:disconnect-openai', async () => {
         await disconnectOpenAI();
         return { success: true, data: getOpenAIAuthStatus() };
+    });
+
+    // Токены не покидают main-процесс: рендерер получает только готовый список моделей
+    ipcMain.handle('get-chatgpt-models', async () => {
+        return await listChatGptModels();
     });
 
     ipcMain.on('update-keybinds', (event, newKeybinds) => {
