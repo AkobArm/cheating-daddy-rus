@@ -339,7 +339,7 @@ export class CustomizeView extends LitElement {
         this.isOpenaiOauthConnecting = false;
         this.openaiOauthMessage = '';
         this.openaiOauthMessageType = '';
-        this.chatgptModel = 'gpt-5.4-mini';
+        this.chatgptModel = 'gpt-6-luna';
         this.chatgptReasoningEffort = 'medium';
         this.chatgptTranscription = 'local';
         this.chatgptWhisperModel = 'base';
@@ -366,10 +366,9 @@ export class CustomizeView extends LitElement {
             const models = await cheatingDaddy.models.listChatGpt();
             if (Array.isArray(models) && models.length > 0) {
                 this.chatgptModels = models;
-                this.chatgptModelsFromCatalog = true;
-                // Сохранённая модель могла исчезнуть из выдачи — иначе селект показал бы пустоту
-                if (!models.some(m => m.slug === this.chatgptModel)) {
-                    this.chatgptModel = models[0].slug;
+                this.chatgptModelsFromCatalog = !models[0].fallback;
+                if (this.chatgptModelsFromCatalog && !models.some(m => m.slug === this.chatgptModel)) {
+                    this.chatgptModel = models.some(m => m.slug === 'gpt-6-luna') ? 'gpt-6-luna' : models[0].slug;
                     await cheatingDaddy.storage.updatePreference('chatgptModel', this.chatgptModel);
                 }
                 this.requestUpdate();
@@ -397,7 +396,7 @@ export class CustomizeView extends LitElement {
             this.audioMode = prefs.audioMode ?? 'speaker_only';
             this.customPrompt = prefs.customPrompt ?? '';
             this.theme = prefs.theme ?? 'dark';
-            this.chatgptModel = prefs.chatgptModel ?? 'gpt-5.4-mini';
+            this.chatgptModel = prefs.chatgptModel ?? 'gpt-6-luna';
             this.chatgptReasoningEffort = prefs.chatgptReasoningEffort ?? 'medium';
             this.chatgptTranscription = prefs.chatgptTranscription ?? 'local';
             this.chatgptWhisperModel = prefs.chatgptWhisperModel ?? 'base';

@@ -50,7 +50,7 @@ const DEFAULT_PREFERENCES = {
     // Vision costs a separate multimodal projector download (657 MB for Qwen3.5-4B)
     localVisionEnabled: true,
     // ChatGPT mode — own Whisper model, kept separate from the local mode's one
-    chatgptModel: 'gpt-5.4-mini',
+    chatgptModel: 'gpt-6-luna',
     chatgptReasoningEffort: 'medium', // 'minimal' | 'low' | 'medium' | 'high' — depth vs latency of answers
     chatgptWhisperModel: 'base',
     // Silero VAD: whisper без него выдумывает фразы на фоновом шуме, и они уходят в модель как вопрос

@@ -39,7 +39,7 @@ function languageDirective(locale) {
     return `\n\nRespond in ${locale}.`;
 }
 
-async function initializeChatGPTSession(profile = 'interview', customPrompt = '', language = 'ru-RU', model = 'gpt-5.4-mini') {
+async function initializeChatGPTSession(profile = 'interview', customPrompt = '', language = 'ru-RU', model = 'gpt-6-luna') {
     sendToRenderer('session-initializing', true);
     try {
         const auth = await ensureValidOpenAIAuth();
@@ -448,7 +448,7 @@ async function regenerateLastAnswer() {
  * Работает по той же подписке, но не трогает историю диалога и не стримит в оверлей:
  * итоги нужны после разговора, когда сессия уже закрыта.
  */
-async function askOneShot(instructions, userText, { model = 'gpt-5.4-mini', reasoningEffort = 'low' } = {}) {
+async function askOneShot(instructions, userText, { model = 'gpt-6-luna', reasoningEffort = 'low' } = {}) {
     const auth = await ensureValidOpenAIAuth();
     if (!auth || !auth.accessToken) {
         throw new Error('ChatGPT account not connected');

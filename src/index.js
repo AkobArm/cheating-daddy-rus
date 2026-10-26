@@ -6,7 +6,7 @@ const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron');
 const { createWindow, updateGlobalShortcuts } = require('./utils/window');
 const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
 const { connectOpenAI, disconnectOpenAI, getOpenAIAuthStatus, ensureValidOpenAIAuth } = require('./utils/openaiOAuth');
-const { listChatGptModels } = require('./utils/openaiModels');
+const { listChatGptModels, migrateSavedChatGptModel } = require('./utils/openaiModels');
 const { summarizeSession } = require('./utils/sessionSummary');
 const storage = require('./storage');
 
@@ -32,6 +32,7 @@ app.whenReady().then(async () => {
     setupGeminiIpcHandlers(geminiSessionRef);
     setupStorageIpcHandlers();
     setupGeneralIpcHandlers();
+    migrateSavedChatGptModel();
 });
 
 app.on('window-all-closed', () => {

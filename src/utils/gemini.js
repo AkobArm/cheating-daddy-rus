@@ -1119,7 +1119,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     );
 
-    ipcMain.handle('initialize-chatgpt', async (event, profile, customPrompt, language = 'ru-RU', model = 'gpt-5.4-mini') => {
+    ipcMain.handle('initialize-chatgpt', async (event, profile, customPrompt, language = 'ru-RU', model = 'gpt-6-luna') => {
         currentProviderMode = 'chatgpt';
         const success = await getChatGptAi().initializeChatGPTSession(profile, customPrompt, language, model);
         if (!success) {

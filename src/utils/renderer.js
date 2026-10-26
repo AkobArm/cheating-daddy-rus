@@ -242,7 +242,7 @@ async function initializeChatGPT(profile = 'interview') {
     const prefs = await storage.getPreferences();
     const customPrompt = prefs.customPrompt || '';
     const language = prefs.selectedLanguage || 'en-US';
-    const model = prefs.chatgptModel || 'gpt-5.4-mini';
+    const model = prefs.chatgptModel || 'gpt-6-luna';
 
     const success = await ipcRenderer.invoke('initialize-chatgpt', profile, customPrompt, language, model);
     if (success) {
