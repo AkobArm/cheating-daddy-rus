@@ -211,6 +211,12 @@ function buildSystemPrompt(promptParts, customPrompt = '', googleSearchEnabled =
 
     sections.push('\n\n', promptParts.content, '\n\nUser-provided context\n-----\n', customPrompt, '\n-----\n\n', promptParts.outputInstructions);
 
+    if (customPrompt.trim()) {
+        sections.push(
+            '\n\n**PRIORITY:** If the User-provided context sets its own rules for answer length, depth, structure or style, follow the User-provided context — it overrides the format and length rules above.'
+        );
+    }
+
     return sections.join('');
 }
 

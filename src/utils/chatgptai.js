@@ -37,6 +37,15 @@ function languageDirective(locale) {
     return `\n\nRespond in ${locale}.`;
 }
 
+const TRANSCRIPT_DIRECTIVE = `
+
+**VOICE INPUT:**
+- Spoken messages are an automatic speech-recognition transcript of the call (mostly the other side of the conversation). Expect misrecognized words, especially technical terms and English words in Russian speech (e.g. "кадре" → "код-ревью", "джанга" → "Django", "кафка" → "Kafka"), missing punctuation and broken sentences.
+- Silently infer what was actually said from context and the topic of the conversation. Never mention transcription errors.
+- A message can be the continuation of the previous one, cut by a pause — treat them as one question.
+- If the message is not a question or task (small talk, "let me think", a remark, an unfinished fragment), reply with one short line instead of a full answer.
+- If a question is genuinely ambiguous, answer the most likely interpretation in the context of this conversation.`;
+
 async function initializeChatGPTSession(profile = 'interview', customPrompt = '', language = 'ru-RU', model = 'gpt-6-luna') {
     sendToRenderer('session-initializing', true);
     try {
@@ -51,7 +60,7 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
         const sttEngine = prefs.chatgptTranscription || 'local'; // 'local' | 'groq' | 'realtime'
         const wantRealtime = sttEngine === 'realtime';
 
-        const systemPrompt = getSystemPrompt(profile, customPrompt, false) + languageDirective(language);
+        const systemPrompt = getSystemPrompt(profile, customPrompt, false) + TRANSCRIPT_DIRECTIVE + languageDirective(language);
         session = {
             systemPrompt,
             model,
