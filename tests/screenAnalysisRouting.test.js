@@ -22,9 +22,10 @@ test('ручной скриншот помечается как разбор э�
 });
 
 test('голосовая реплика отправляется без этого признака', () => {
-    const fn = source.match(/async function sendToChatGPT\(text\)[\s\S]*?\n\}/);
+    const fn = source.match(/async function sendToChatGPT\(text[^)]*\)[\s\S]*?\n\}/);
     assert.ok(fn, 'не найдена отправка голосовой реплики');
-    assert.match(fn[0], /await streamResponses\(content\);/, 'реплика не должна помечаться как разбор экрана');
+    assert.match(fn[0], /await streamResponses\(content(, \{ speechEndedAt \})?\);/, 'реплика не должна помечаться как разбор экрана');
+    assert.ok(!/isScreenAnalysis/.test(fn[0]), 'реплика не должна помечаться как разбор экрана');
     assert.ok(/latestScreenshot/.test(fn[0]), 'к реплике по-прежнему прикладывается последний кадр');
 });
 

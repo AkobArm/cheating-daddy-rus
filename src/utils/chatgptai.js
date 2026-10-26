@@ -3,6 +3,7 @@ const { sendToRenderer, initializeNewSession, saveConversationTurn, saveScreenAn
 const { getSystemPrompt } = require('./prompts');
 const transcription = require('./transcription');
 const { createAudioMixer } = require('./audioMixer');
+const { createSpeechSegmenter } = require('./speechSegmenter');
 const realtime = require('./realtimeTranscription');
 const groq = require('./groqTranscription');
 const { ensureValidOpenAIAuth, refreshOpenAIAuth } = require('./openaiOAuth');
@@ -11,18 +12,15 @@ const storage = require('../storage');
 const RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
 const ORIGINATOR = 'codex_cli_rs';
 
-// VAD constants. Кадр микшера — 100 мс, поэтому N кадров тишины = N * 100 мс.
-const SILENCE_RMS = 0.01;
 const FRAME_MS = 100;
 const DEFAULT_SILENCE_FRAMES = 8; // 0.8 с — настраивается через chatgptSilenceMs
-// Короткий всплеск громкости (щелчок, стук по столу) не должен считаться репликой и запускать ответ
-const MIN_SPEECH_FRAMES = 3; // 0.3 с реальной речи
 const DEFAULT_HISTORY_MESSAGES = 10; // keep last N turns (user+assistant) as conversation context
 
-let session = null; // { systemPrompt, model, sessionId, audioBuffer, speechFrames, silenceCount, isSpeaking }
+let session = null;
 let latestScreenshot = null;
 let isGenerating = false;
 let pendingTranscription = null;
+let pendingSpeechEndedAt = null;
 
 function isChatGPTSessionActive() {
     return session !== null;
@@ -58,10 +56,7 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
             systemPrompt,
             model,
             sessionId: crypto.randomUUID(),
-            audioBuffer: [],
-            speechFrames: 0,
-            silenceCount: 0,
-            isSpeaking: false,
+            segmenter: null,
             sttEngine,
             langCode: (language || 'en-US').split('-')[0],
             useRealtime: wantRealtime,
@@ -73,6 +68,11 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
             lastRequestWasScreen: false,
             mixer: null,
         };
+        session.segmenter = createSpeechSegmenter({
+            silenceFrames: session.silenceFrames,
+            onSpeechStart: () => sendToRenderer('update-status', 'Listening... (speech detected)'),
+            onUtterance: handleSpeechEnd,
+        });
         const audioMode = prefs.audioMode || 'speaker_only';
         session.mixer = createAudioMixer(processMixedFrame, {
             expectMic: audioMode === 'mic_only' || audioMode === 'both',
@@ -147,45 +147,21 @@ function processChatGPTAudio(monoChunk24k, source = 'system') {
 
 function processMixedFrame(pcm16k) {
     if (!session) return;
-    const rms = transcription.calculateRMS(pcm16k);
-    session.audioBuffer.push(pcm16k);
-
-    if (rms > SILENCE_RMS) {
-        if (!session.isSpeaking) {
-            session.isSpeaking = true;
-            sendToRenderer('update-status', 'Listening... (speech detected)');
-        }
-        session.silenceCount = 0;
-        session.speechFrames++;
-    } else if (session.isSpeaking) {
-        session.silenceCount++;
-        if (session.silenceCount >= session.silenceFrames) {
-            // Считанного всплеска слишком мало для реплики — это шум, ждём дальше, а не запускаем ответ
-            if (session.speechFrames < MIN_SPEECH_FRAMES) {
-                session.isSpeaking = false;
-                session.silenceCount = 0;
-                session.speechFrames = 0;
-                session.audioBuffer = [];
-                return;
-            }
-
-            const audio = Buffer.concat(session.audioBuffer);
-            session.audioBuffer = [];
-            session.isSpeaking = false;
-            session.silenceCount = 0;
-            session.speechFrames = 0;
-            handleSpeechEnd(audio);
-        }
-    } else if (session.audioBuffer.length > session.silenceFrames) {
-        session.audioBuffer.shift();
-    }
+    session.segmenter.push(pcm16k, transcription.calculateRMS(pcm16k));
 }
 
-async function handleSpeechEnd(audioData) {
+async function handleSpeechEnd(audioData, stats) {
     if (!session) {
         return;
     }
+    const speechEndedAt = Date.now() - (stats.forced ? 0 : session.silenceFrames * FRAME_MS);
+    console.log(
+        `[VAD] Реплика ${((stats.frames * FRAME_MS) / 1000).toFixed(1)} с` +
+            (stats.forced ? ' (порезана по лимиту длины)' : `, пауза ${session.silenceFrames * FRAME_MS} мс`) +
+            `, фон RMS ${stats.noiseFloor.toFixed(4)}, порог ${stats.threshold.toFixed(4)}`
+    );
     sendToRenderer('update-status', 'Transcribing...');
+    const transcribeStartedAt = Date.now();
     let text;
     try {
         if (session.sttEngine === 'groq') {
@@ -197,11 +173,13 @@ async function handleSpeechEnd(audioData) {
         sendToRenderer('update-status', 'Transcription error: ' + error.message);
         return;
     }
+    console.log(`[Timing] Распознавание: ${Date.now() - transcribeStartedAt} мс (${session.sttEngine})`);
     if (!text || transcription.isNoiseTranscription(text)) {
         sendToRenderer('update-status', 'Listening...');
         return;
     }
     pendingTranscription = text;
+    pendingSpeechEndedAt = speechEndedAt;
     drainGenerations();
 }
 
@@ -212,9 +190,11 @@ async function drainGenerations() {
     isGenerating = true;
     while (pendingTranscription && session) {
         const text = pendingTranscription;
+        const speechEndedAt = pendingSpeechEndedAt;
         pendingTranscription = null;
+        pendingSpeechEndedAt = null;
         sendToRenderer('update-status', 'Generating response...');
-        await sendToChatGPT(text);
+        await sendToChatGPT(text, speechEndedAt);
     }
     isGenerating = false;
     if (session) {
@@ -262,12 +242,13 @@ function buildBody(model, instructions, content, history = [], reasoningEffort =
 
 /**
  * @param {Array} content части запроса
- * @param {{retryOn401?: boolean, isScreenAnalysis?: boolean}} options
+ * @param {{retryOn401?: boolean, isScreenAnalysis?: boolean, speechEndedAt?: number|null}} options
  *   isScreenAnalysis отличает ручной разбор экрана от голосовой реплики, к которой
- *   просто приложен последний кадр — иначе обычный диалог уезжал бы во вкладку Screen
+ *   просто приложен последний кадр — иначе обычный диалог уезжал бы во вкладку Screen.
+ *   speechEndedAt — когда стихла реплика, для лога полной задержки
  */
 async function streamResponses(content, options = {}) {
-    const { retryOn401 = true, isScreenAnalysis = false } = options;
+    const { retryOn401 = true, isScreenAnalysis = false, speechEndedAt = null } = options;
     const auth = await ensureValidOpenAIAuth();
     if (!auth || !auth.accessToken) {
         sendToRenderer('update-status', 'ChatGPT account not connected');
@@ -277,6 +258,7 @@ async function streamResponses(content, options = {}) {
         return;
     }
 
+    const requestStartedAt = Date.now();
     const resp = await fetch(RESPONSES_URL, {
         method: 'POST',
         headers: buildHeaders(auth, session.sessionId),
@@ -314,6 +296,14 @@ async function streamResponses(content, options = {}) {
         }
         if (evt.type === 'response.output_text.delta' && typeof evt.delta === 'string') {
             fullText += evt.delta;
+            if (isFirst) {
+                const now = Date.now();
+                console.log(
+                    `[Timing] Первый токен: ${now - requestStartedAt} мс после запроса` +
+                        (speechEndedAt ? `, ${now - speechEndedAt} мс после конца речи` : '') +
+                        ` (${session?.model}, reasoning ${session?.reasoningEffort})`
+                );
+            }
             sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
             isFirst = false;
         } else if (evt.type === 'response.completed' || evt.type === 'response.output_text.done') {
@@ -363,7 +353,7 @@ async function streamResponses(content, options = {}) {
     }
 }
 
-async function sendToChatGPT(text) {
+async function sendToChatGPT(text, speechEndedAt = null) {
     if (!session) {
         return;
     }
@@ -372,7 +362,7 @@ async function sendToChatGPT(text) {
         content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${latestScreenshot}` });
     }
     try {
-        await streamResponses(content);
+        await streamResponses(content, { speechEndedAt });
     } catch (error) {
         sendToRenderer('update-status', 'ChatGPT error: ' + error.message);
     }
