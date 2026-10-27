@@ -8,6 +8,7 @@ const { createUtteranceMerger } = require('./utteranceMerger');
 const realtime = require('./realtimeTranscription');
 const groq = require('./groqTranscription');
 const { ensureValidOpenAIAuth, refreshOpenAIAuth } = require('./openaiOAuth');
+const compat = require('./openaiCompat');
 const storage = require('../storage');
 
 const RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
@@ -47,14 +48,22 @@ const TRANSCRIPT_DIRECTIVE = `
 - If the message is not a question or task (small talk, "let me think", a remark, an unfinished fragment), reply with one short line instead of a full answer.
 - If a question is genuinely ambiguous, answer the most likely interpretation in the context of this conversation.`;
 
-async function initializeChatGPTSession(profile = 'interview', customPrompt = '', language = 'ru-RU', model = 'gpt-6-luna') {
+/**
+ * @param {{label: string, baseUrl: string, apiKey: string, disableThinking?: boolean}|null} compatBackend
+ *   null — подписка ChatGPT (Responses API); иначе любой OpenAI-совместимый /chat/completions
+ *   с тем же голосовым конвейером
+ */
+async function initializeChatGPTSession(profile = 'interview', customPrompt = '', language = 'ru-RU', model = 'gpt-6-luna', compatBackend = null) {
+    const label = compatBackend ? compatBackend.label : 'ChatGPT';
     sendToRenderer('session-initializing', true);
     try {
-        const auth = await ensureValidOpenAIAuth();
-        if (!auth || !auth.accessToken) {
-            sendToRenderer('session-initializing', false);
-            sendToRenderer('update-status', 'ChatGPT account not connected');
-            return false;
+        if (!compatBackend) {
+            const auth = await ensureValidOpenAIAuth();
+            if (!auth || !auth.accessToken) {
+                sendToRenderer('session-initializing', false);
+                sendToRenderer('update-status', 'ChatGPT account not connected');
+                return false;
+            }
         }
 
         const prefs = storage.getPreferences();
@@ -65,6 +74,8 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
         session = {
             systemPrompt,
             model,
+            label,
+            compat: compatBackend,
             sessionId: crypto.randomUUID(),
             segmenter: null,
             merger: null,
@@ -127,12 +138,12 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
         }
 
         sendToRenderer('session-initializing', false);
-        sendToRenderer('update-status', 'ChatGPT ready - Listening...');
+        sendToRenderer('update-status', `${label} ready - Listening...`);
         return true;
     } catch (error) {
         session = null;
         sendToRenderer('session-initializing', false);
-        sendToRenderer('update-status', 'ChatGPT error: ' + error.message);
+        sendToRenderer('update-status', `${label} error: ${error.message}`);
         return false;
     }
 }
@@ -274,36 +285,78 @@ function buildBody(model, instructions, content, history = [], reasoningEffort =
  *   просто приложен последний кадр — иначе обычный диалог уезжал бы во вкладку Screen.
  *   speechEndedAt — когда стихла реплика, для лога полной задержки
  */
-async function streamResponses(content, options = {}) {
-    const { retryOn401 = true, isScreenAnalysis = false, speechEndedAt = null } = options;
+async function requestChatGPT(content, retryOn401) {
     const auth = await ensureValidOpenAIAuth();
     if (!auth || !auth.accessToken) {
         sendToRenderer('update-status', 'ChatGPT account not connected');
-        return;
+        return null;
     }
     if (!session) {
-        return;
+        return null;
     }
 
-    const requestStartedAt = Date.now();
     const resp = await fetch(RESPONSES_URL, {
         method: 'POST',
         headers: buildHeaders(auth, session.sessionId),
         body: buildBody(session.model, session.systemPrompt, content, session.history, session.reasoningEffort),
     });
-
     if (resp.status === 401 && retryOn401) {
         const refreshed = await refreshOpenAIAuth(auth).catch(() => null);
         if (refreshed) {
-            return streamResponses(content, { ...options, retryOn401: false });
+            return requestChatGPT(content, false);
         }
     }
+    return resp;
+}
+
+function requestCompat(content) {
+    const { baseUrl, apiKey, disableThinking } = session.compat;
+    return compat.requestChatCompletion({
+        baseUrl,
+        apiKey,
+        body: compat.buildChatBody({
+            model: session.model,
+            instructions: session.systemPrompt,
+            content,
+            history: session.history,
+            baseUrl,
+            disableThinking,
+        }),
+    });
+}
+
+function extractChatGPTDelta(evt) {
+    return evt.type === 'response.output_text.delta' && typeof evt.delta === 'string' ? evt.delta : '';
+}
+
+async function streamResponses(content, options = {}) {
+    const { retryOn401 = true, isScreenAnalysis = false, speechEndedAt = null } = options;
+    if (!session) {
+        return;
+    }
+
+    const requestStartedAt = Date.now();
+    const isCompat = Boolean(session.compat);
+    const label = session.label;
+    const resp = isCompat ? await requestCompat(content) : await requestChatGPT(content, retryOn401);
+    if (!resp || !session) {
+        return;
+    }
     if (!resp.ok) {
+        if (isCompat) {
+            const message = await compat.describeHttpError(resp, label);
+            console.error(`[${label}] ${message}`);
+            sendToRenderer('update-status', message.slice(0, 240));
+            return;
+        }
         const errText = await resp.text().catch(() => '');
         console.error(`[ChatGPT] error ${resp.status} body:`, errText.slice(0, 1000));
         sendToRenderer('update-status', `ChatGPT error ${resp.status}: ${errText.slice(0, 200)}`);
         return;
     }
+    const extractDelta = isCompat ? compat.extractDelta : extractChatGPTDelta;
+    // Локальные модели (LM Studio, Ollama) пишут рассуждения в тексте ответа внутри <think>
+    const visible = text => (isCompat ? compat.stripThinkingTags(text) : text);
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -321,17 +374,23 @@ async function streamResponses(content, options = {}) {
         } catch {
             return;
         }
-        if (evt.type === 'response.output_text.delta' && typeof evt.delta === 'string') {
-            fullText += evt.delta;
+        const delta = extractDelta(evt);
+        if (delta) {
+            fullText += delta;
+            const shown = visible(fullText);
+            if (!shown) {
+                return;
+            }
             if (isFirst) {
                 const now = Date.now();
                 console.log(
                     `[Timing] Первый токен: ${now - requestStartedAt} мс после запроса` +
                         (speechEndedAt ? `, ${now - speechEndedAt} мс после конца речи` : '') +
-                        ` (${session?.model}, reasoning ${session?.reasoningEffort})`
+                        ` (${session?.model}` +
+                        (isCompat ? `, ${label})` : `, reasoning ${session?.reasoningEffort})`)
                 );
             }
-            sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+            sendToRenderer(isFirst ? 'new-response' : 'update-response', shown);
             isFirst = false;
         } else if (evt.type === 'response.completed' || evt.type === 'response.output_text.done') {
             if (fullText) {
@@ -356,6 +415,7 @@ async function streamResponses(content, options = {}) {
         }
     }
 
+    fullText = visible(fullText);
     if (fullText) {
         const promptText = content.map(c => c.text || '[image]').join(' ');
         if (isScreenAnalysis) {
@@ -391,7 +451,7 @@ async function sendToChatGPT(text, speechEndedAt = null) {
     try {
         await streamResponses(content, { speechEndedAt });
     } catch (error) {
-        sendToRenderer('update-status', 'ChatGPT error: ' + error.message);
+        sendToRenderer('update-status', `${session?.label || 'ChatGPT'} error: ${error.message}`);
     }
 }
 
@@ -408,7 +468,7 @@ async function sendChatGPTImage(base64Data, prompt = '') {
     try {
         await streamResponses(content, { isScreenAnalysis: true });
     } catch (error) {
-        sendToRenderer('update-status', 'ChatGPT error: ' + error.message);
+        sendToRenderer('update-status', `${session?.label || 'ChatGPT'} error: ${error.message}`);
     }
     if (session) {
         sendToRenderer('update-status', 'Listening...');
@@ -448,7 +508,7 @@ async function regenerateLastAnswer() {
     try {
         await streamResponses(session.lastRequest, { isScreenAnalysis: session.lastRequestWasScreen });
     } catch (error) {
-        sendToRenderer('update-status', 'ChatGPT error: ' + error.message);
+        sendToRenderer('update-status', `${session?.label || 'ChatGPT'} error: ${error.message}`);
         return false;
     } finally {
         isGenerating = false;

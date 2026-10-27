@@ -3,7 +3,18 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
-const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKey, incrementCharUsage, getConfig } = require('../storage');
+const {
+    getAvailableModel,
+    incrementLimitCount,
+    getApiKey,
+    getGroqApiKey,
+    incrementCharUsage,
+    getConfig,
+    getPreferences,
+    getCredentials,
+} = require('../storage');
+const { modelsToTry, isRetryableModelError } = require('./geminiModels');
+const { GROQ_MAX_COMPLETION_TOKENS, stripThinkingTags, getGroqReasoningOptions } = require('./openaiCompat');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
 const { startTransportLog, logTransportEvent, closeTransportLog } = require('./transportLogger');
 
@@ -55,7 +66,6 @@ let systemAudioProc = null;
 let messageBuffer = '';
 let groqRequestStartedForTurn = false;
 
-const GROQ_MAX_COMPLETION_TOKENS = 16384;
 const GROQ_EMPTY_RESPONSE_MESSAGE =
     'Groq reached the maximum completion-token limit before returning a final answer. Disable thinking in Home → AI responses and try again.';
 
@@ -172,11 +182,12 @@ function getCurrentSessionData() {
 async function getEnabledTools() {
     const tools = [];
 
-    // Check if Google Search is enabled (default: true)
-    const googleSearchEnabled = await getStoredSetting('googleSearchEnabled', 'true');
+    // Раньше флаг читался из localStorage, где его никогда не было, и поиск включался всегда.
+    // На бесплатном ключе googleSearch закрывает Live-сессию ложным «quota exceeded».
+    const googleSearchEnabled = getPreferences().googleSearchEnabled === true;
     console.log('Google Search enabled:', googleSearchEnabled);
 
-    if (googleSearchEnabled === 'true') {
+    if (googleSearchEnabled) {
         tools.push({ googleSearch: {} });
         console.log('Added Google Search tool');
     } else {
@@ -184,39 +195,6 @@ async function getEnabledTools() {
     }
 
     return tools;
-}
-
-async function getStoredSetting(key, defaultValue) {
-    try {
-        const windows = BrowserWindow.getAllWindows();
-        if (windows.length > 0) {
-            // Wait a bit for the renderer to be ready
-            await new Promise(resolve => setTimeout(resolve, 100));
-
-            // Try to get setting from renderer process localStorage
-            const value = await windows[0].webContents.executeJavaScript(`
-                (function() {
-                    try {
-                        if (typeof localStorage === 'undefined') {
-                            console.log('localStorage not available yet for ${key}');
-                            return '${defaultValue}';
-                        }
-                        const stored = localStorage.getItem('${key}');
-                        console.log('Retrieved setting ${key}:', stored);
-                        return stored || '${defaultValue}';
-                    } catch (e) {
-                        console.error('Error accessing localStorage for ${key}:', e);
-                        return '${defaultValue}';
-                    }
-                })()
-            `);
-            return value;
-        }
-    } catch (error) {
-        console.error('Error getting stored setting for', key, ':', error.message);
-    }
-    console.log('Using default value for', key, ':', defaultValue);
-    return defaultValue;
 }
 
 // helper to check if groq has been configured
@@ -253,37 +231,6 @@ function trimConversationHistoryForGemma(history, maxChars = 42000) {
         trimmed.unshift(turn);
     }
     return trimmed;
-}
-
-function stripThinkingTags(text) {
-    const trimmedStart = text.trimStart();
-    if ('<think>'.startsWith(trimmedStart)) {
-        return '';
-    }
-
-    return text.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '').trim();
-}
-
-function getGroqReasoningOptions(model, disableThinking) {
-    if (model.includes('qwen3')) {
-        const options = {
-            reasoning_format: 'hidden',
-        };
-
-        if (disableThinking) {
-            options.reasoning_effort = 'none';
-        }
-
-        return options;
-    }
-
-    if (model.startsWith('openai/gpt-oss-')) {
-        return {
-            include_reasoning: false,
-        };
-    }
-
-    return {};
 }
 
 async function sendToGroq(transcription) {
@@ -1011,59 +958,68 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
 }
 
 async function sendImageToGeminiHttp(base64Data, prompt) {
-    // Get available model based on rate limits
-    const model = getAvailableModel();
-
     const apiKey = getApiKey();
     if (!apiKey) {
         return { success: false, error: 'No API key configured' };
     }
 
-    try {
-        const ai = new GoogleGenAI({ apiKey: apiKey });
-
-        const contents = [
-            {
-                inlineData: {
-                    mimeType: 'image/jpeg',
-                    data: base64Data,
-                },
+    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const contents = [
+        {
+            inlineData: {
+                mimeType: 'image/jpeg',
+                data: base64Data,
             },
-            { text: prompt },
-        ];
+        },
+        { text: prompt },
+    ];
 
-        console.log(`Sending image to ${model} (streaming)...`);
-        const response = await ai.models.generateContentStream({
-            model: model,
-            contents: contents,
-        });
+    // Get available model based on rate limits, then walk the fallback chain
+    const preferred = getAvailableModel();
+    let lastError = 'Unknown error';
+    for (const model of modelsToTry(preferred)) {
+        let streamedText = false;
+        try {
+            console.log(`Sending image to ${model} (streaming)...`);
+            const response = await ai.models.generateContentStream({
+                model: model,
+                contents: contents,
+            });
 
-        // Increment count after successful call
-        incrementLimitCount(model);
-
-        // Stream the response
-        let fullText = '';
-        let isFirst = true;
-        for await (const chunk of response) {
-            const chunkText = chunk.text;
-            if (chunkText) {
-                fullText += chunkText;
-                // Send to renderer - new response for first chunk, update for subsequent
-                sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
-                isFirst = false;
+            // Stream the response
+            let fullText = '';
+            let isFirst = true;
+            for await (const chunk of response) {
+                const chunkText = chunk.text;
+                if (chunkText) {
+                    fullText += chunkText;
+                    streamedText = true;
+                    // Send to renderer - new response for first chunk, update for subsequent
+                    sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+                    isFirst = false;
+                }
             }
+
+            // Increment count after successful call
+            incrementLimitCount(model);
+            console.log(`Image response completed from ${model}`);
+
+            // Save screen analysis to history
+            saveScreenAnalysis(prompt, fullText, model, base64Data);
+
+            return { success: true, text: fullText, model: model };
+        } catch (error) {
+            lastError = error.message || String(error);
+            console.error(`Image request failed on ${model}:`, lastError);
+            // Часть ответа уже на экране — повтор на другой модели продублировал бы его
+            if (streamedText || !isRetryableModelError(error)) {
+                return { success: false, error: lastError };
+            }
+            sendToRenderer('update-status', `${model} unavailable, trying another model...`);
         }
-
-        console.log(`Image response completed from ${model}`);
-
-        // Save screen analysis to history
-        saveScreenAnalysis(prompt, fullText, model, base64Data);
-
-        return { success: true, text: fullText, model: model };
-    } catch (error) {
-        console.error('Error sending image to Gemini HTTP:', error);
-        return { success: false, error: error.message };
     }
+
+    return { success: false, error: lastError };
 }
 
 function setupGeminiIpcHandlers(geminiSessionRef) {
@@ -1126,6 +1082,32 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             currentProviderMode = 'byok';
         }
         return success;
+    });
+
+    // OpenAI-совместимый API идёт через тот же конвейер, что и подписка ChatGPT (chatgptai.js),
+    // поэтому и маршрутизация звука, текста и кадров та же — режим 'chatgpt'
+    ipcMain.handle('initialize-openai-compat', async (event, profile, customPrompt, language = 'ru-RU') => {
+        const { resolveCompatSettings } = require('./openaiCompat');
+        const settings = resolveCompatSettings(getPreferences(), getCredentials(), getConfig());
+        if (!settings.baseUrl || !settings.model) {
+            sendToRenderer('update-status', 'Set the API base URL and model first');
+            return false;
+        }
+        currentProviderMode = 'chatgpt';
+        const success = await getChatGptAi().initializeChatGPTSession(profile, customPrompt, language, settings.model, settings);
+        if (!success) {
+            currentProviderMode = 'byok';
+        }
+        return success;
+    });
+
+    ipcMain.handle('openai-compat:list-models', async (event, { baseUrl, apiKey, label }) => {
+        try {
+            const { listModels } = require('./openaiCompat');
+            return { success: true, models: await listModels({ baseUrl, apiKey, label }) };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
     });
 
     ipcMain.handle('regenerate-answer', async () => {
@@ -1455,7 +1437,6 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
 module.exports = {
     initializeGeminiSession,
     getEnabledTools,
-    getStoredSetting,
     sendToRenderer,
     initializeNewSession,
     saveConversationTurn,

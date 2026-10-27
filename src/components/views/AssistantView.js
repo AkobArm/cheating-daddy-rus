@@ -1,5 +1,7 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
 
+const katexStylesheetUrl = new URL('../../../node_modules/katex/dist/katex.min.css', import.meta.url).href;
+
 export class AssistantView extends LitElement {
     static styles = css`
         :host {
@@ -25,7 +27,9 @@ export class AssistantView extends LitElement {
             scroll-behavior: smooth;
             user-select: text;
             cursor: text;
-            color: var(--text-primary);
+            /* Settings → Appearance → Response Text Color, иначе цвет темы */
+            --response-text: var(--response-text-color, var(--text-primary));
+            color: var(--response-text);
         }
 
         .response-container * {
@@ -41,6 +45,20 @@ export class AssistantView extends LitElement {
             display: inline-block;
         }
 
+        .response-container .math-inline {
+            display: inline;
+        }
+
+        .response-container .math-block {
+            display: block;
+            max-width: 100%;
+            margin: 0.8em 0;
+            padding: 0.35em 0;
+            overflow-x: auto;
+            overflow-y: hidden;
+            text-align: center;
+        }
+
         /* ── Markdown ── */
 
         .response-container h1,
@@ -50,7 +68,7 @@ export class AssistantView extends LitElement {
         .response-container h5,
         .response-container h6 {
             margin: 1em 0 0.5em 0;
-            color: var(--text-primary);
+            color: var(--response-text);
             font-weight: var(--font-weight-semibold);
         }
 
@@ -73,14 +91,14 @@ export class AssistantView extends LitElement {
 
         .response-container p {
             margin: 0.6em 0;
-            color: var(--text-primary);
+            color: var(--response-text);
         }
 
         .response-container ul,
         .response-container ol {
             margin: 0.6em 0;
             padding-left: 1.5em;
-            color: var(--text-primary);
+            color: var(--response-text);
         }
 
         .response-container li {
@@ -374,7 +392,9 @@ export class AssistantView extends LitElement {
                     gfm: true,
                     sanitize: false,
                 });
-                let rendered = window.marked.parse(content);
+                const math = window.katex && window.extractMath ? window.extractMath(content) : { markdown: content, expressions: [] };
+                let rendered = window.marked.parse(math.markdown);
+                rendered = this.renderMathPlaceholders(rendered, math.expressions);
                 rendered = this.wrapWordsInSpans(rendered);
                 return rendered;
             } catch (error) {
@@ -385,10 +405,35 @@ export class AssistantView extends LitElement {
         return content;
     }
 
+    renderMathPlaceholders(htmlContent, expressions) {
+        if (!expressions.length) return htmlContent;
+
+        const template = document.createElement('template');
+        template.innerHTML = htmlContent;
+        template.content.querySelectorAll('[data-math-placeholder]').forEach(placeholder => {
+            const expression = expressions[Number(placeholder.dataset.mathPlaceholder)];
+            if (!expression) return;
+
+            const wrapper = document.createElement(expression.displayMode ? 'div' : 'span');
+            wrapper.className = expression.displayMode ? 'math-block' : 'math-inline';
+            // throwOnError: false — битая формула показывается исходником красным, а не роняет ответ
+            wrapper.innerHTML = window.katex.renderToString(expression.source, {
+                displayMode: expression.displayMode,
+                throwOnError: false,
+                strict: 'ignore',
+                trust: false,
+                output: 'htmlAndMathml',
+            });
+            placeholder.replaceWith(wrapper);
+        });
+        return template.innerHTML;
+    }
+
     wrapWordsInSpans(html) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
         const tagsToSkip = ['PRE'];
+        // Внутрь формул KaTeX (.katex) тоже не заходим: inline-block на словах ломает индексы и дроби
 
         function wrap(node) {
             if (node.nodeType === Node.TEXT_NODE && node.textContent.trim() && !tagsToSkip.includes(node.parentNode.tagName)) {
@@ -405,7 +450,7 @@ export class AssistantView extends LitElement {
                     }
                 });
                 node.parentNode.replaceChild(frag, node);
-            } else if (node.nodeType === Node.ELEMENT_NODE && !tagsToSkip.includes(node.tagName)) {
+            } else if (node.nodeType === Node.ELEMENT_NODE && !tagsToSkip.includes(node.tagName) && !node.classList.contains('katex')) {
                 Array.from(node.childNodes).forEach(wrap);
             }
         }
@@ -709,6 +754,7 @@ export class AssistantView extends LitElement {
         const hasMultipleResponses = this.responses.length > 1;
 
         return html`
+            <link rel="stylesheet" href=${katexStylesheetUrl} />
             <div class="response-container" id="responseContainer"></div>
 
             ${

@@ -1,5 +1,7 @@
 // renderer.js
 const { ipcRenderer } = require('electron');
+// Путь от index.html: обычный <script> разрешает require() от каталога страницы
+const { normalizeHexColor } = require('./utils/colors');
 
 let mediaStream = null;
 let screenshotInterval = null;
@@ -11,9 +13,6 @@ const SAMPLE_RATE = 24000;
 const AUDIO_CHUNK_DURATION = 0.1; // seconds
 const BUFFER_SIZE = 4096; // Increased buffer size for smoother audio
 
-let hiddenVideo = null;
-let offscreenCanvas = null;
-let offscreenContext = null;
 let currentImageQuality = 'medium'; // Store current image quality for manual screenshots
 
 const isLinux = process.platform === 'linux';
@@ -165,6 +164,12 @@ const models = {
     async listChatGpt() {
         return ipcRenderer.invoke('get-chatgpt-models');
     },
+    /** Модели OpenAI-совместимого API (GET /models): { success, models } или { success: false, error } */
+    async listCompat(baseUrl, apiKey, label) {
+        return ipcRenderer.invoke('openai-compat:list-models', { baseUrl, apiKey, label });
+    },
+    // Модуль без зависимостей от Electron — безопасно подключать в окне
+    compatPresets: require('./utils/openaiCompat').PRESETS,
 };
 
 // Cache for preferences to avoid async calls in hot paths
@@ -254,6 +259,13 @@ async function initializeChatGPT(profile = 'interview') {
     }
 }
 
+async function initializeOpenAICompat(profile = 'interview') {
+    const prefs = await storage.getPreferences();
+    const success = await ipcRenderer.invoke('initialize-openai-compat', profile, prefs.customPrompt || '', prefs.selectedLanguage || 'en-US');
+    cheatingDaddy.setStatus(success ? 'API Live' : 'error');
+    return success;
+}
+
 async function initializeCloud(profile = 'interview') {
     const creds = await storage.getCredentials();
     const token = creds.cloudToken;
@@ -289,7 +301,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
     try {
         if (isMacOS) {
-            // On macOS, use SystemAudioDump for audio and getDisplayMedia for screen
+            // On macOS, use SystemAudioDump for audio; screenshots come from the main process
             console.log('Starting macOS capture with SystemAudioDump...');
 
             // Start macOS audio capture
@@ -298,17 +310,9 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                 throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
             }
 
-            // Get screen capture for screenshots
-            mediaStream = await navigator.mediaDevices.getDisplayMedia({
-                video: {
-                    frameRate: 1,
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 },
-                },
-                audio: false, // Don't use browser audio on macOS
-            });
-
-            console.log('macOS screen capture started - audio handled by SystemAudioDump');
+            // Поток getDisplayMedia на macOS не нужен: скриншоты снимает main-процесс (capture-screen),
+            // а кадр из потока на macOS 15+ включал бы наше собственное окно
+            console.log('macOS capture started - audio handled by SystemAudioDump');
 
             if (audioMode === 'mic_only' || audioMode === 'both') {
                 let micStream = null;
@@ -435,11 +439,13 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             }
         }
 
-        console.log('MediaStream obtained:', {
-            hasVideo: mediaStream.getVideoTracks().length > 0,
-            hasAudio: mediaStream.getAudioTracks().length > 0,
-            videoTrack: mediaStream.getVideoTracks()[0]?.getSettings(),
-        });
+        if (mediaStream) {
+            console.log('MediaStream obtained:', {
+                hasVideo: mediaStream.getVideoTracks().length > 0,
+                hasAudio: mediaStream.getAudioTracks().length > 0,
+                videoTrack: mediaStream.getVideoTracks()[0]?.getSettings(),
+            });
+        }
 
         // Manual mode only - screenshots captured on demand via shortcut
         console.log('Manual mode enabled - screenshots will be captured on demand only');
@@ -544,94 +550,18 @@ function setupWindowsLoopbackProcessing() {
 
 async function captureScreenshot(imageQuality = 'medium', isManual = false) {
     console.log(`Capturing ${isManual ? 'manual' : 'automated'} screenshot...`);
-    if (!mediaStream) return;
-
-    // Lazy init of video element
-    if (!hiddenVideo) {
-        hiddenVideo = document.createElement('video');
-        hiddenVideo.srcObject = mediaStream;
-        hiddenVideo.muted = true;
-        hiddenVideo.playsInline = true;
-        await hiddenVideo.play();
-
-        await new Promise(resolve => {
-            if (hiddenVideo.readyState >= 2) return resolve();
-            hiddenVideo.onloadedmetadata = () => resolve();
-        });
-
-        // Lazy init of canvas based on video dimensions
-        offscreenCanvas = document.createElement('canvas');
-        offscreenCanvas.width = hiddenVideo.videoWidth;
-        offscreenCanvas.height = hiddenVideo.videoHeight;
-        offscreenContext = offscreenCanvas.getContext('2d');
-    }
-
-    // Check if video is ready
-    if (hiddenVideo.readyState < 2) {
-        console.warn('Video not ready yet, skipping screenshot');
+    const capture = await ipcRenderer.invoke('capture-screen', { quality: imageQuality, manual: isManual });
+    if (!capture.success) {
+        console.error('Screen capture failed:', capture.error);
         return;
     }
 
-    offscreenContext.drawImage(hiddenVideo, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
-
-    // Check if image was drawn properly by sampling a pixel
-    const imageData = offscreenContext.getImageData(0, 0, 1, 1);
-    const isBlank = imageData.data.every((value, index) => {
-        // Check if all pixels are black (0,0,0) or transparent
-        return index === 3 ? true : value === 0;
-    });
-
-    if (isBlank) {
-        console.warn('Screenshot appears to be blank/black');
+    const result = await ipcRenderer.invoke('send-image-content', { data: capture.data });
+    if (result.success) {
+        console.log(`Image sent successfully (${capture.width}x${capture.height})`);
+    } else {
+        console.error('Failed to send image:', result.error);
     }
-
-    let qualityValue;
-    switch (imageQuality) {
-        case 'high':
-            qualityValue = 0.9;
-            break;
-        case 'medium':
-            qualityValue = 0.7;
-            break;
-        case 'low':
-            qualityValue = 0.5;
-            break;
-        default:
-            qualityValue = 0.7; // Default to medium
-    }
-
-    offscreenCanvas.toBlob(
-        async blob => {
-            if (!blob) {
-                console.error('Failed to create blob from canvas');
-                return;
-            }
-
-            const reader = new FileReader();
-            reader.onloadend = async () => {
-                const base64data = reader.result.split(',')[1];
-
-                // Validate base64 data
-                if (!base64data || base64data.length < 100) {
-                    console.error('Invalid base64 data generated');
-                    return;
-                }
-
-                const result = await ipcRenderer.invoke('send-image-content', {
-                    data: base64data,
-                });
-
-                if (result.success) {
-                    console.log(`Image sent successfully (${offscreenCanvas.width}x${offscreenCanvas.height})`);
-                } else {
-                    console.error('Failed to send image:', result.error);
-                }
-            };
-            reader.readAsDataURL(blob);
-        },
-        'image/jpeg',
-        qualityValue
-    );
 }
 
 // Что спросить у модели по кадру экрана. Заменяется настройкой manualScreenshotPrompt.
@@ -654,107 +584,35 @@ async function captureManualScreenshot(imageQuality = null) {
     console.log('Manual screenshot triggered');
     const quality = imageQuality || currentImageQuality;
 
-    if (!mediaStream) {
-        console.error('No media stream available');
+    // Ужимаем до 1280 px по ширине — модели 4K не нужен, а передача быстрее
+    const capture = await ipcRenderer.invoke('capture-screen', { quality, manual: true });
+    if (!capture.success) {
+        console.error('Screen capture failed:', capture.error);
+        cheatingDaddy.addNewResponse(`Error: ${capture.error}`);
         return;
     }
 
-    // Lazy init of video element
-    if (!hiddenVideo) {
-        hiddenVideo = document.createElement('video');
-        hiddenVideo.srcObject = mediaStream;
-        hiddenVideo.muted = true;
-        hiddenVideo.playsInline = true;
-        await hiddenVideo.play();
+    console.log(`Sending image: ${capture.width}x${capture.height}, ~${Math.round(capture.data.length / 1024)}KB`);
 
-        await new Promise(resolve => {
-            if (hiddenVideo.readyState >= 2) return resolve();
-            hiddenVideo.onloadedmetadata = () => resolve();
-        });
+    // Send image with prompt to HTTP API (response streams via IPC events)
+    const result = await ipcRenderer.invoke('send-image-content', {
+        data: capture.data,
+        prompt: getManualScreenshotPrompt(),
+    });
 
-        // Lazy init of canvas based on video dimensions
-        offscreenCanvas = document.createElement('canvas');
-        offscreenCanvas.width = hiddenVideo.videoWidth;
-        offscreenCanvas.height = hiddenVideo.videoHeight;
-        offscreenContext = offscreenCanvas.getContext('2d');
+    if (result.success) {
+        console.log(`Image response completed from ${result.model}`);
+        // Response already displayed via streaming events (new-response/update-response)
+    } else {
+        console.error('Failed to get image response:', result.error);
+        cheatingDaddy.addNewResponse(`Error: ${result.error}`);
     }
-
-    // Check if video is ready
-    if (hiddenVideo.readyState < 2) {
-        console.warn('Video not ready yet, skipping screenshot');
-        return;
-    }
-
-    // Downscale to max 1280px wide for faster transfer — vision models don't need 4K
-    const MAX_WIDTH = 1280;
-    const srcW = hiddenVideo.videoWidth;
-    const srcH = hiddenVideo.videoHeight;
-    let destW = srcW;
-    let destH = srcH;
-    if (srcW > MAX_WIDTH) {
-        destW = MAX_WIDTH;
-        destH = Math.round(srcH * (MAX_WIDTH / srcW));
-    }
-    offscreenCanvas.width = destW;
-    offscreenCanvas.height = destH;
-    offscreenContext.drawImage(hiddenVideo, 0, 0, destW, destH);
-
-    let qualityValue;
-    switch (quality) {
-        case 'high':
-            qualityValue = 0.85;
-            break;
-        case 'medium':
-            qualityValue = 0.6;
-            break;
-        case 'low':
-            qualityValue = 0.4;
-            break;
-        default:
-            qualityValue = 0.6;
-    }
-
-    offscreenCanvas.toBlob(
-        async blob => {
-            if (!blob) {
-                console.error('Failed to create blob from canvas');
-                return;
-            }
-
-            const reader = new FileReader();
-            reader.onloadend = async () => {
-                const base64data = reader.result.split(',')[1];
-
-                if (!base64data || base64data.length < 100) {
-                    console.error('Invalid base64 data generated');
-                    return;
-                }
-
-                console.log(`Sending image: ${destW}x${destH}, ~${Math.round(base64data.length / 1024)}KB`);
-
-                // Send image with prompt to HTTP API (response streams via IPC events)
-                const result = await ipcRenderer.invoke('send-image-content', {
-                    data: base64data,
-                    prompt: getManualScreenshotPrompt(),
-                });
-
-                if (result.success) {
-                    console.log(`Image response completed from ${result.model}`);
-                    // Response already displayed via streaming events (new-response/update-response)
-                } else {
-                    console.error('Failed to get image response:', result.error);
-                    cheatingDaddy.addNewResponse(`Error: ${result.error}`);
-                }
-            };
-            reader.readAsDataURL(blob);
-        },
-        'image/jpeg',
-        qualityValue
-    );
 }
 
 // Expose functions to global scope for external access
 window.captureManualScreenshot = captureManualScreenshot;
+// Для AssistantView: ES-модуль компонента не может сам подключить CommonJS-модуль
+window.extractMath = require('./utils/mathMarkdown').extractMath;
 
 function stopCapture() {
     if (screenshotInterval) {
@@ -789,15 +647,6 @@ function stopCapture() {
             console.error('Error stopping macOS audio:', err);
         });
     }
-
-    // Clean up hidden elements
-    if (hiddenVideo) {
-        hiddenVideo.pause();
-        hiddenVideo.srcObject = null;
-        hiddenVideo = null;
-    }
-    offscreenCanvas = null;
-    offscreenContext = null;
 }
 
 // Send text message to Gemini
@@ -1145,6 +994,7 @@ const theme = {
             const themeName = prefs.theme || 'dark';
             const alpha = prefs.backgroundTransparency ?? 0.8;
             this.apply(themeName, alpha);
+            this.applyResponseTextColor(prefs.responseTextColor);
             return themeName;
         } catch (err) {
             this.apply('dark');
@@ -1155,6 +1005,24 @@ const theme = {
     async save(themeName) {
         await storage.updatePreference('theme', themeName);
         this.apply(themeName);
+    },
+
+    // Цвет текста ответов (настройка responseTextColor); null или мусор — цвет из темы
+    applyResponseTextColor(color) {
+        const normalized = normalizeHexColor(color);
+        if (normalized) {
+            document.documentElement.style.setProperty('--response-text-color', normalized);
+        } else {
+            document.documentElement.style.removeProperty('--response-text-color');
+        }
+        return normalized;
+    },
+
+    async saveResponseTextColor(color) {
+        const normalized = normalizeHexColor(color);
+        await storage.updatePreference('responseTextColor', normalized);
+        this.applyResponseTextColor(normalized);
+        return normalized;
     },
 };
 
@@ -1183,6 +1051,7 @@ const cheatingDaddy = {
     cancelLocalInitialization,
     regenerateAnswer,
     initializeChatGPT,
+    initializeOpenAICompat,
     startCapture,
     stopCapture,
     sendTextMessage,

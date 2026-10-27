@@ -182,10 +182,10 @@ export class AICustomizeView extends LitElement {
                         <div class="form-grid">
                             <div class="form-group">
                                 <label class="form-label">Profile</label>
-                                <select class="control" .value=${this.selectedProfile} @change=${this._handleProfileChange}>
+                                <select class="control" @change=${this._handleProfileChange}>
                                     ${profiles.map(
                                         profile =>
-                                            html`<option value=${profile.value} ?selected=${profile.value === this.selectedProfile}>
+                                            html`<option value=${profile.value} .selected=${profile.value === this.selectedProfile}>
                                                 ${profile.label}
                                             </option>`
                                     )}
@@ -195,9 +195,9 @@ export class AICustomizeView extends LitElement {
                             <div class="form-group">
                                 <label class="form-label">Prompt preset</label>
                                 <div class="preset-row">
-                                    <select class="control grow" .value=${this._selectedPresetId} @change=${this._selectPreset}>
+                                    <select class="control grow" @change=${this._selectPreset}>
                                         ${this._presets.map(
-                                            p => html`<option value=${p.id} ?selected=${p.id === this._selectedPresetId}>${p.name}</option>`
+                                            p => html`<option value=${p.id} .selected=${p.id === this._selectedPresetId}>${p.name}</option>`
                                         )}
                                     </select>
                                     <button class="control" @click=${this._newPreset}>+ New</button>

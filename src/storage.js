@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { safeStorage } = require('electron');
+const { SCREEN_MODEL, SCREEN_MODEL_LITE, LIVE_MODEL, RETIRED_LIVE_DEFAULTS } = require('./utils/geminiModels');
 
 const CONFIG_VERSION = 1;
 
@@ -10,7 +11,7 @@ const DEFAULT_CONFIG = {
     configVersion: CONFIG_VERSION,
     onboarded: false,
     layout: 'normal',
-    geminiLiveModel: 'gemini-3.1-flash-live-preview',
+    geminiLiveModel: LIVE_MODEL,
     groqModel: 'qwen/qwen3.6-27b',
     groqImageModel: 'qwen/qwen3.6-27b',
     disableGroqThinking: true,
@@ -20,6 +21,8 @@ const DEFAULT_CREDENTIALS = {
     apiKey: '',
     groqApiKey: '',
     openaiOAuth: null,
+    // Режим OpenAI-compatible API; для Groq без своего ключа берётся groqApiKey
+    compatApiKey: '',
 };
 
 const DEFAULT_PREFERENCES = {
@@ -43,6 +46,8 @@ const DEFAULT_PREFERENCES = {
     audioMode: 'speaker_only',
     fontSize: 'medium',
     backgroundTransparency: 0.8,
+    // '#rrggbb' для текста ответов в оверлее; null — цвет текста из темы
+    responseTextColor: null,
     googleSearchEnabled: false,
     // Local AI mode — native llama-server / whisper-server runtime
     localLlmModel: 'unsloth/Qwen3.5-4B-GGUF:Q4_K_M',
@@ -64,6 +69,11 @@ const DEFAULT_PREFERENCES = {
     // whisper-large-v3-turbo, needs Groq key) | 'realtime' (OpenAI realtime — needs an API org,
     // usually unavailable for a plain ChatGPT subscription). Default to local.
     chatgptTranscription: 'local',
+    // OpenAI-compatible API (Groq, OpenAI, OpenRouter, LM Studio, Ollama…) — голос и настройки
+    // распознавания общие с режимом ChatGPT. Пустой compatBaseUrl — адрес из пресета.
+    compatPreset: 'groq',
+    compatBaseUrl: '',
+    compatModel: '',
 };
 
 const DEFAULT_KEYBINDS = null; // null means use system defaults
@@ -133,7 +143,11 @@ function writeJsonFile(filePath, data) {
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
-        fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+        // Через временный файл и rename: падение посреди записи иначе оставляет обрезанный JSON,
+        // и при следующем чтении настройки молча откатываются к значениям по умолчанию
+        const tmpPath = `${filePath}.tmp`;
+        fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf8');
+        fs.renameSync(tmpPath, filePath);
         return true;
     } catch (error) {
         console.error(`Error writing ${filePath}:`, error.message);
@@ -216,22 +230,37 @@ function serializeOpenaiOAuth(oauth) {
     };
 }
 
-// Check if we need to reset (no configVersion or wrong version)
-function needsReset() {
+// Версия из config.json; null — конфига нет или он не читается
+function readStoredConfigVersion() {
     const configPath = getConfigPath();
     if (!fs.existsSync(configPath)) {
-        return true;
+        return null;
     }
 
     try {
-        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        return !config.configVersion || config.configVersion !== CONFIG_VERSION;
+        return JSON.parse(fs.readFileSync(configPath, 'utf8')).configVersion || null;
     } catch {
-        return true;
+        return null;
     }
 }
 
-// Wipe and reinitialize the config directory
+// Раньше любое расхождение версии (и даже битый config.json) стирало всю папку: ключи,
+// токены ChatGPT, промпт и историю. Теперь переписывается только config.json, остальное не трогаем.
+function migrateConfigDir(storedVersion) {
+    console.log(`Migrating config from version ${storedVersion || 'unversioned'} to ${CONFIG_VERSION}`);
+
+    const existingConfig = readJsonFile(getConfigPath(), {});
+    writeJsonFile(getConfigPath(), { ...DEFAULT_CONFIG, ...existingConfig, configVersion: CONFIG_VERSION });
+
+    if (!fs.existsSync(getCredentialsPath())) {
+        writeJsonFile(getCredentialsPath(), DEFAULT_CREDENTIALS);
+    }
+    if (!fs.existsSync(getPreferencesPath())) {
+        writeJsonFile(getPreferencesPath(), DEFAULT_PREFERENCES);
+    }
+}
+
+// Wipe and reinitialize the config directory — only for explicit Clear All / import
 function resetConfigDir() {
     const configDir = getConfigDir();
 
@@ -256,14 +285,14 @@ function resetConfigDir() {
 
 // Initialize storage - call this on app startup
 function initializeStorage() {
-    if (needsReset()) {
-        resetConfigDir();
-    } else {
-        // Ensure history directory exists
-        const historyDir = getHistoryDir();
-        if (!fs.existsSync(historyDir)) {
-            fs.mkdirSync(historyDir, { recursive: true });
-        }
+    const storedVersion = readStoredConfigVersion();
+    if (storedVersion !== CONFIG_VERSION) {
+        migrateConfigDir(storedVersion);
+    }
+
+    const historyDir = getHistoryDir();
+    if (!fs.existsSync(historyDir)) {
+        fs.mkdirSync(historyDir, { recursive: true });
     }
 }
 
@@ -271,7 +300,11 @@ function initializeStorage() {
 
 function getConfig() {
     const saved = readJsonFile(getConfigPath(), {});
-    return { ...DEFAULT_CONFIG, ...saved };
+    const config = { ...DEFAULT_CONFIG, ...saved };
+    if (RETIRED_LIVE_DEFAULTS.includes(config.geminiLiveModel)) {
+        config.geminiLiveModel = LIVE_MODEL;
+    }
+    return config;
 }
 
 function setConfig(config) {
@@ -471,10 +504,10 @@ function incrementLimitCount(model) {
     }
 
     // Increment the appropriate model count
-    if (model === 'gemini-2.5-flash') {
-        todayEntry.flash.count++;
-    } else if (model === 'gemini-2.5-flash-lite') {
+    if (model === SCREEN_MODEL_LITE) {
         todayEntry.flashLite.count++;
+    } else if (model.startsWith('gemini-')) {
+        todayEntry.flash.count++;
     }
 
     setLimits(limits);
@@ -502,12 +535,12 @@ function getAvailableModel() {
     // RPD limits: flash = 20, flash-lite = 20
     // After both exhausted, fall back to flash (for paid API users)
     if (todayLimits.flash.count < 20) {
-        return 'gemini-2.5-flash';
+        return SCREEN_MODEL;
     } else if (todayLimits.flashLite.count < 20) {
-        return 'gemini-2.5-flash-lite';
+        return SCREEN_MODEL_LITE;
     }
 
-    return 'gemini-2.5-flash'; // Default to flash for paid API users
+    return SCREEN_MODEL; // Default to flash for paid API users
 }
 
 function getModelForToday() {

@@ -711,6 +711,14 @@ export class MainView extends LitElement {
         _selectedLanguage: { state: true },
         _localVisionEnabled: { state: true },
         _showLocalHelp: { state: true },
+        // OpenAI-compatible API state
+        _compatPreset: { state: true },
+        _compatBaseUrl: { state: true },
+        _compatModel: { state: true },
+        _compatApiKey: { state: true },
+        _compatModels: { state: true },
+        _compatModelsError: { state: true },
+        _compatModelsLoading: { state: true },
     };
 
     constructor() {
@@ -729,7 +737,7 @@ export class MainView extends LitElement {
         this._geminiKey = '';
         this._groqKey = '';
         this._openaiKey = '';
-        this._geminiLiveModel = 'gemini-3.1-flash-live-preview';
+        this._geminiLiveModel = 'gemini-3.8-live';
         this._groqModel = 'qwen/qwen3.6-27b';
         this._groqImageModel = 'qwen/qwen3.6-27b';
         this._disableGroqThinking = true;
@@ -741,6 +749,13 @@ export class MainView extends LitElement {
         this._whisperModel = 'tiny.en';
         this._selectedLanguage = 'en-US';
         this._localVisionEnabled = true;
+        this._compatPreset = 'groq';
+        this._compatBaseUrl = '';
+        this._compatModel = '';
+        this._compatApiKey = '';
+        this._compatModels = [];
+        this._compatModelsError = '';
+        this._compatModelsLoading = false;
 
         this._animId = null;
         this._time = 0;
@@ -771,7 +786,7 @@ export class MainView extends LitElement {
             this._geminiKey = (await cheatingDaddy.storage.getApiKey().catch(() => '')) || '';
             this._groqKey = (await cheatingDaddy.storage.getGroqApiKey().catch(() => '')) || '';
             this._openaiKey = creds.openaiKey || '';
-            this._geminiLiveModel = config.geminiLiveModel || 'gemini-3.1-flash-live-preview';
+            this._geminiLiveModel = config.geminiLiveModel || 'gemini-3.8-live';
             this._groqModel = config.groqModel || 'qwen/qwen3.6-27b';
             this._groqImageModel = config.groqImageModel || 'qwen/qwen3.6-27b';
             this._disableGroqThinking = config.disableGroqThinking === true;
@@ -783,7 +798,13 @@ export class MainView extends LitElement {
             this._selectedLanguage = prefs.selectedLanguage || 'en-US';
             this._localVisionEnabled = prefs.localVisionEnabled !== false;
 
+            this._compatPreset = prefs.compatPreset || 'groq';
+            this._compatBaseUrl = prefs.compatBaseUrl || '';
+            this._compatModel = prefs.compatModel || '';
+            this._compatApiKey = creds.compatApiKey || '';
+
             this.requestUpdate();
+            if (this._mode === 'compat') this._loadCompatModels();
         } catch (e) {
             console.error('Error loading MainView storage:', e);
         }
@@ -926,6 +947,7 @@ export class MainView extends LitElement {
         this._keyError = false;
         await cheatingDaddy.storage.updatePreference('providerMode', mode);
         this.requestUpdate();
+        if (mode === 'compat') this._loadCompatModels();
     }
 
     async _saveToken(val) {
@@ -1007,6 +1029,64 @@ export class MainView extends LitElement {
         this.requestUpdate();
     }
 
+    // ── OpenAI-compatible API ──
+
+    _compatPresetInfo() {
+        const presets = cheatingDaddy.models.compatPresets;
+        return presets.find(preset => preset.id === this._compatPreset) || presets[0];
+    }
+
+    _compatEffectiveBaseUrl() {
+        return this._compatBaseUrl || this._compatPresetInfo().baseUrl;
+    }
+
+    // Для Groq без своего ключа сработает ключ Groq из BYOK — тот же выбор делает main-процесс
+    _compatEffectiveApiKey() {
+        return this._compatApiKey || (this._compatPreset === 'groq' ? this._groqKey : '');
+    }
+
+    async _saveCompatPreset(id) {
+        this._compatPreset = id;
+        this._compatBaseUrl = '';
+        this._compatModels = [];
+        await cheatingDaddy.storage.updatePreference('compatPreset', id);
+        await cheatingDaddy.storage.updatePreference('compatBaseUrl', '');
+        this._loadCompatModels();
+    }
+
+    async _saveCompatBaseUrl(val) {
+        this._compatBaseUrl = val.trim();
+        await cheatingDaddy.storage.updatePreference('compatBaseUrl', this._compatBaseUrl);
+    }
+
+    async _saveCompatModel(val) {
+        this._compatModel = val.trim();
+        await cheatingDaddy.storage.updatePreference('compatModel', this._compatModel);
+    }
+
+    async _saveCompatApiKey(val) {
+        this._compatApiKey = val;
+        try {
+            const creds = await cheatingDaddy.storage.getCredentials().catch(() => ({}));
+            await cheatingDaddy.storage.setCredentials({ ...creds, compatApiKey: val });
+        } catch (e) {}
+    }
+
+    async _loadCompatModels() {
+        const baseUrl = this._compatEffectiveBaseUrl();
+        if (!baseUrl) return;
+        this._compatModelsLoading = true;
+        this._compatModelsError = '';
+        const result = await cheatingDaddy.models.listCompat(baseUrl, this._compatEffectiveApiKey(), this._compatPresetInfo().label);
+        this._compatModelsLoading = false;
+        if (result.success) {
+            this._compatModels = result.models;
+        } else {
+            this._compatModels = [];
+            this._compatModelsError = result.error;
+        }
+    }
+
     async _saveLocalVision(enabled) {
         this._localVisionEnabled = enabled;
         await cheatingDaddy.storage.updatePreference('localVisionEnabled', enabled);
@@ -1049,6 +1129,12 @@ export class MainView extends LitElement {
             if (!this._localLlmModel.trim()) {
                 return;
             }
+        } else if (this._mode === 'compat') {
+            if (!this._compatModel.trim() || !this._compatEffectiveBaseUrl()) {
+                this._keyError = true;
+                this.requestUpdate();
+                return;
+            }
         }
 
         this.onStart();
@@ -1056,7 +1142,7 @@ export class MainView extends LitElement {
 
     triggerApiKeyError() {
         // Only BYOK has an API-key field; local and chatgpt have none.
-        this._keyError = this._mode === 'byok';
+        this._keyError = this._mode === 'byok' || this._mode === 'compat';
         this.requestUpdate();
         setTimeout(() => {
             this._tokenError = false;
@@ -1258,6 +1344,7 @@ export class MainView extends LitElement {
             <div class="mode-links">
                 <button class="mode-link" @click=${() => this._saveMode('local')}>Use local AI</button>
                 <button class="mode-link" @click=${() => this._saveMode('chatgpt')}>Use ChatGPT subscription</button>
+                <button class="mode-link" @click=${() => this._saveMode('compat')}>Use OpenAI-compatible API</button>
             </div>
         `;
     }
@@ -1277,17 +1364,15 @@ export class MainView extends LitElement {
                 <div class="config-content">
                     <div class="form-group">
                         <label class="form-label">Model</label>
-                        <!-- Выбор задаётся через ?selected на опциях: .value на <select> Lit применяет
-                             раньше, чем вставит опции из .map(), и селект откатывается на первую -->
                         <select @change=${event => this._selectLocalLlmModel(event.target.value)}>
                             ${LOCAL_LLM_PRESETS.map(
                                 preset => html`
-                                    <option value=${preset.value} ?selected=${!this._useCustomLocalLlmModel && this._localLlmModel === preset.value}>
+                                    <option value=${preset.value} .selected=${!this._useCustomLocalLlmModel && this._localLlmModel === preset.value}>
                                         ${preset.label}
                                     </option>
                                 `
                             )}
-                            <option value="custom" ?selected=${this._useCustomLocalLlmModel}>Custom Hugging Face model or local GGUF…</option>
+                            <option value="custom" .selected=${this._useCustomLocalLlmModel}>Custom Hugging Face model or local GGUF…</option>
                         </select>
                         ${
                             this._useCustomLocalLlmModel
@@ -1369,6 +1454,103 @@ export class MainView extends LitElement {
             <div class="mode-links">
                 <button class="mode-link" @click=${() => this._saveMode('byok')}>Use own API keys</button>
                 <button class="mode-link" @click=${() => this._saveMode('chatgpt')}>Use ChatGPT subscription</button>
+                <button class="mode-link" @click=${() => this._saveMode('compat')}>Use OpenAI-compatible API</button>
+            </div>
+        `;
+    }
+
+    // ── OpenAI-compatible API mode ──
+
+    _renderCompatMode() {
+        const preset = this._compatPresetInfo();
+        const isLocal = preset.id === 'lmstudio' || preset.id === 'ollama';
+        return html`
+            <details class="config-section" open>
+                <summary class="config-summary">
+                    <span class="config-summary-text">
+                        <span class="config-summary-title">Provider</span>
+                        <span class="config-summary-description">Any OpenAI-compatible chat completions API</span>
+                    </span>
+                    ${this._renderConfigChevron()}
+                </summary>
+                <div class="config-content">
+                    <div class="form-group">
+                        <label class="form-label">Provider</label>
+                        <select @change=${e => this._saveCompatPreset(e.target.value)}>
+                            ${cheatingDaddy.models.compatPresets.map(
+                                p => html`<option value=${p.id} .selected=${p.id === this._compatPreset}>${p.label}</option>`
+                            )}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Base URL</label>
+                        <input
+                            type="text"
+                            placeholder=${preset.baseUrl || 'https://host/v1'}
+                            .value=${this._compatBaseUrl}
+                            @change=${async e => {
+                                await this._saveCompatBaseUrl(e.target.value);
+                                this._loadCompatModels();
+                            }}
+                        />
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">API Key</label>
+                        <input
+                            type="password"
+                            placeholder=${isLocal ? 'Not needed for a local server' : preset.id === 'groq' && this._groqKey ? 'Using the Groq key from BYOK' : 'Required'}
+                            .value=${this._compatApiKey}
+                            @input=${e => this._saveCompatApiKey(e.target.value)}
+                            @change=${() => this._loadCompatModels()}
+                        />
+                        ${
+                            preset.keyUrl
+                                ? html`<div class="form-hint">
+                                      <span class="link" @click=${() => this.onExternalLink(preset.keyUrl)}>Get ${preset.label} key</span>
+                                  </div>`
+                                : ''
+                        }
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Model</label>
+                        <input
+                            type="text"
+                            list="compat-models"
+                            placeholder="Model id"
+                            .value=${this._compatModel}
+                            class=${this._keyError && !this._compatModel ? 'error' : ''}
+                            @input=${e => this._saveCompatModel(e.target.value)}
+                        />
+                        <datalist id="compat-models">${this._compatModels.map(id => html`<option value=${id}></option>`)}</datalist>
+                        <div class="form-hint">
+                            ${
+                                this._compatModelsLoading
+                                    ? 'Loading models...'
+                                    : this._compatModelsError
+                                      ? this._compatModelsError
+                                      : this._compatModels.length
+                                        ? `${this._compatModels.length} models available. Screenshots need a vision model.`
+                                        : html`<span class="link" @click=${() => this._loadCompatModels()}>Load model list</span>`
+                            }
+                        </div>
+                    </div>
+
+                    <div class="config-note">
+                        Speech is transcribed with the same engine as ChatGPT mode (Settings → ChatGPT: local Whisper or Groq), only the text goes to
+                        this API.
+                    </div>
+                </div>
+            </details>
+
+            ${this._renderStartButton()} ${this._renderDivider()}
+
+            <div class="mode-links">
+                <button class="mode-link" @click=${() => this._saveMode('byok')}>Use own API keys</button>
+                <button class="mode-link" @click=${() => this._saveMode('chatgpt')}>Use ChatGPT subscription</button>
+                <button class="mode-link" @click=${() => this._saveMode('local')}>Use local AI</button>
             </div>
         `;
     }
@@ -1393,6 +1575,7 @@ export class MainView extends LitElement {
             <div class="mode-links">
                 <button class="mode-link" @click=${() => this._saveMode('byok')}>Use own API keys</button>
                 <button class="mode-link" @click=${() => this._saveMode('local')}>Use local AI</button>
+                <button class="mode-link" @click=${() => this._saveMode('compat')}>Use OpenAI-compatible API</button>
             </div>
         `;
     }
@@ -1422,7 +1605,9 @@ export class MainView extends LitElement {
                           `
                         : this._mode === 'chatgpt'
                           ? html` <div class="page-title">${html`Cheating Daddy <span class="mode-suffix">ChatGPT</span>`}</div> `
-                          : html` <div class="page-title">${html`Cheating Daddy <span class="mode-suffix">BYOK</span>`}</div> `
+                          : this._mode === 'compat'
+                            ? html` <div class="page-title">${html`Cheating Daddy <span class="mode-suffix">API</span>`}</div> `
+                            : html` <div class="page-title">${html`Cheating Daddy <span class="mode-suffix">BYOK</span>`}</div> `
                 }
                 <div class="page-subtitle">
                     ${
@@ -1430,13 +1615,15 @@ export class MainView extends LitElement {
                             ? 'Bring your own API keys'
                             : this._mode === 'chatgpt'
                               ? 'Use your ChatGPT subscription'
-                              : 'Run models locally on your machine'
+                              : this._mode === 'compat'
+                                ? 'Groq, OpenAI, OpenRouter, LM Studio or any OpenAI-compatible API'
+                                : 'Run models locally on your machine'
                     }
                 </div>
 
                 <!-- Cloud mode render branch intentionally disabled. -->
                 ${this._mode === 'byok' ? this._renderByokMode() : ''} ${this._mode === 'chatgpt' ? this._renderChatGptMode() : ''}
-                ${this._mode === 'local' ? this._renderLocalMode() : ''}
+                ${this._mode === 'local' ? this._renderLocalMode() : ''} ${this._mode === 'compat' ? this._renderCompatMode() : ''}
             </div>
             ${this._mode === 'local' && this._showLocalHelp ? this._renderLocalHelp(closeIcon) : ''}
         `;

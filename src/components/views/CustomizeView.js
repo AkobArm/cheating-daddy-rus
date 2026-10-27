@@ -174,6 +174,22 @@ export class CustomizeView extends LitElement {
                 padding: 2px 8px;
             }
 
+            .color-row {
+                display: flex;
+                align-items: center;
+                gap: var(--space-sm);
+            }
+
+            .color-input {
+                width: 36px;
+                height: 28px;
+                padding: 0 2px;
+                background: var(--bg-elevated);
+                border: 1px solid var(--border);
+                border-radius: var(--radius-sm);
+                cursor: pointer;
+            }
+
             .slider-input {
                 -webkit-appearance: none;
                 appearance: none;
@@ -281,6 +297,7 @@ export class CustomizeView extends LitElement {
         googleSearchEnabled: { type: Boolean },
         backgroundTransparency: { type: Number },
         fontSize: { type: Number },
+        responseTextColor: { type: String },
         theme: { type: String },
         openaiOauthStatus: { type: Object },
         isOpenaiOauthConnecting: { type: Boolean },
@@ -323,7 +340,7 @@ export class CustomizeView extends LitElement {
         this.onLanguageChange = () => {};
         this.onImageQualityChange = () => {};
         this.onLayoutModeChange = () => {};
-        this.googleSearchEnabled = true;
+        this.googleSearchEnabled = false;
         this.isClearing = false;
         this.isRestoring = false;
         this.clearStatusMessage = '';
@@ -332,6 +349,7 @@ export class CustomizeView extends LitElement {
         this.backupStatusType = '';
         this.backgroundTransparency = 0.8;
         this.fontSize = 20;
+        this.responseTextColor = null;
         this.audioMode = 'speaker_only';
         this.customPrompt = '';
         this.theme = 'dark';
@@ -390,9 +408,10 @@ export class CustomizeView extends LitElement {
                 cheatingDaddy.oauth.getOpenAIStatus(),
                 cheatingDaddy.storage.getOpenaiOAuth(),
             ]);
-            this.googleSearchEnabled = prefs.googleSearchEnabled ?? true;
+            this.googleSearchEnabled = prefs.googleSearchEnabled ?? false;
             this.backgroundTransparency = prefs.backgroundTransparency ?? 0.8;
             this.fontSize = prefs.fontSize ?? 20;
+            this.responseTextColor = prefs.responseTextColor ?? null;
             this.audioMode = prefs.audioMode ?? 'speaker_only';
             this.customPrompt = prefs.customPrompt ?? '';
             this.theme = prefs.theme ?? 'dark';
@@ -773,6 +792,14 @@ export class CustomizeView extends LitElement {
         this.requestUpdate();
     }
 
+    async handleResponseTextColorChange(e) {
+        this.responseTextColor = await cheatingDaddy.theme.saveResponseTextColor(e.target.value);
+    }
+
+    async resetResponseTextColor() {
+        this.responseTextColor = await cheatingDaddy.theme.saveResponseTextColor(null);
+    }
+
     updateFontSize() {
         document.documentElement.style.setProperty('--response-font-size', `${this.fontSize}px`);
     }
@@ -862,6 +889,7 @@ export class CustomizeView extends LitElement {
                 backgroundTransparency: 0.8,
                 googleSearchEnabled: false,
                 theme: 'dark',
+                responseTextColor: null,
             };
             for (const [key, value] of Object.entries(defaults)) {
                 await cheatingDaddy.storage.updatePreference(key, value);
@@ -885,6 +913,7 @@ export class CustomizeView extends LitElement {
             this.googleSearchEnabled = defaults.googleSearchEnabled;
             this.customPrompt = defaults.customPrompt;
             this.theme = defaults.theme;
+            this.responseTextColor = defaults.responseTextColor;
 
             // Notify parent callbacks
             this.onProfileChange(defaults.selectedProfile);
@@ -894,6 +923,7 @@ export class CustomizeView extends LitElement {
             // Apply visual changes
             this.updateBackgroundAppearance();
             this.updateFontSize();
+            cheatingDaddy.theme.applyResponseTextColor(defaults.responseTextColor);
             await cheatingDaddy.theme.save(defaults.theme);
 
             this.clearStatusMessage = 'All settings restored to defaults';
@@ -1060,10 +1090,10 @@ export class CustomizeView extends LitElement {
                 <div class="form-grid">
                     <div class="form-group">
                         <label class="form-label">Speech Language</label>
-                        <select class="control" .value=${this.selectedLanguage} @change=${this.handleLanguageSelect}>
+                        <select class="control" @change=${this.handleLanguageSelect}>
                             ${this.getLanguages().map(
                                 language =>
-                                    html`<option value=${language.value} ?selected=${language.value === this.selectedLanguage}>
+                                    html`<option value=${language.value} .selected=${language.value === this.selectedLanguage}>
                                         ${language.name}
                                     </option>`
                             )}
@@ -1081,8 +1111,8 @@ export class CustomizeView extends LitElement {
                 <div class="form-grid">
                     <div class="form-group">
                         <label class="form-label">Theme</label>
-                        <select class="control" .value=${this.theme} @change=${this.handleThemeChange}>
-                            ${this.getThemes().map(theme => html`<option value=${theme.value}>${theme.name}</option>`)}
+                        <select class="control" @change=${this.handleThemeChange}>
+                            ${this.getThemes().map(theme => html`<option value=${theme.value} .selected=${theme.value === this.theme}>${theme.name}</option>`)}
                         </select>
                     </div>
                     <div class="form-group slider-wrap">
@@ -1114,6 +1144,27 @@ export class CustomizeView extends LitElement {
                             .value=${this.fontSize}
                             @input=${this.handleFontSizeChange}
                         />
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Response Text Color</label>
+                        <div class="color-row">
+                            <span class="slider-value">${this.responseTextColor || 'Theme'}</span>
+                            <input
+                                class="color-input"
+                                type="color"
+                                title="Response text color"
+                                .value=${this.responseTextColor || cheatingDaddy.theme.get(this.theme).text}
+                                @input=${this.handleResponseTextColorChange}
+                            />
+                            <button
+                                class="control"
+                                style="width:auto;padding:6px 10px;"
+                                @click=${this.resetResponseTextColor}
+                                ?disabled=${!this.responseTextColor}
+                            >
+                                Reset
+                            </button>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -1159,11 +1210,9 @@ export class CustomizeView extends LitElement {
 
                     <div class="form-group vertical">
                         <label class="form-label">Answer model</label>
-                        <!-- Без .value на <select>: Lit применяет его раньше, чем вставит опции из .map(),
-                             и селект откатывается на первую. Выбор задаём через ?selected на опциях -->
                         <select class="control" @change=${this.handleChatgptModelSelect}>
                             ${this.chatgptModels.map(
-                                m => html`<option value=${m.slug} ?selected=${this.chatgptModel === m.slug}>${m.displayName}</option>`
+                                m => html`<option value=${m.slug} .selected=${this.chatgptModel === m.slug}>${m.displayName}</option>`
                             )}
                         </select>
                         <div class="form-help">

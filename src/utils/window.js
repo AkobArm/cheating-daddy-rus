@@ -340,6 +340,28 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
         return { success: true };
     });
 
+    // Скриншот без окна приложения — см. utils/screenCapture.js
+    ipcMain.handle('capture-screen', async (event, options = {}) => {
+        try {
+            const { desktopCapturer } = require('electron');
+            const { captureScreen, jpegQualityFor } = require('./screenCapture');
+            const isManual = options.manual === true;
+
+            const result = await captureScreen({
+                desktopCapturer,
+                screen,
+                preferredDisplayId: storage.getPreferences().selectedDisplayId || '',
+                windowBounds: mainWindow.isDestroyed() ? null : mainWindow.getBounds(),
+                maxWidth: isManual ? 1280 : 1920,
+                quality: jpegQualityFor(options.quality, isManual),
+            });
+            return { success: true, ...result };
+        } catch (error) {
+            console.error('Error capturing screen:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     ipcMain.handle('window-minimize', () => {
         if (!mainWindow.isDestroyed()) {
             mainWindow.minimize();

@@ -626,6 +626,13 @@ export class CheatingDaddyApp extends LitElement {
                 }
                 return;
             }
+        } else if (providerMode === 'compat') {
+            const success = await cheatingDaddy.initializeOpenAICompat(this.selectedProfile);
+            if (!success) {
+                const mainView = this.shadowRoot.querySelector('main-view');
+                if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
+                return;
+            }
         } else if (providerMode === 'chatgpt') {
             const status = await cheatingDaddy.oauth.getOpenAIStatus();
             if (!status || !status.connected) {

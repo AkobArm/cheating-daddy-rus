@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Cheating Daddy — Electron desktop app for real-time AI assistance during video calls, interviews, and presentations. Captures screen and audio, sends to AI (Google Gemini, Groq, Ollama, or cloud API), streams responses in an overlay window.
 
-Model identifiers are hardcoded in `src/utils/gemini.js`: `gemini-3.1-flash-live-preview` (Live API) and `gemma-4-26b-a4b-it`. These break with 404 NOT_FOUND when Google retires a version (happened with `gemma-3-27b-it`) — update the strings in `gemini.js` AND `storage.js` (usage-tracking keys) together.
+Gemini model identifiers live in `src/utils/geminiModels.js`: Live API default (`gemini-3.8-live`), screen-analysis model plus a fallback chain (newest flash models often return 503 "high demand" on free keys), and retired Live defaults that `storage.getConfig()` migrates. `gemma-4-26b-a4b-it` is still hardcoded in `gemini.js` and `storage.js` (usage-tracking keys). Models break with 404 NOT_FOUND when Google retires a version (happened with `gemma-3-27b-it` and `gemini-2.5-flash`) — check the live list with `GET https://generativelanguage.googleapis.com/v1beta/models` before changing them.
 
 Fork of [sohzm/cheating-daddy](https://github.com/sohzm/cheating-daddy). Upstream PRs are cherry-picked; after merging, verify `npm install && npm start` still works.
 

@@ -40,5 +40,7 @@ test('повторная генерация сохраняет тип исход
 });
 
 test('повтор при истёкшем токене не теряет признак', () => {
-    assert.match(source, /streamResponses\(content, \{ \.\.\.options, retryOn401: false \}\)/);
+    // Повтор после 401 делается на уровне запроса, до разбора потока, — опции streamResponses не теряются
+    assert.match(source, /return requestChatGPT\(content, false\);/);
+    assert.match(source, /await requestChatGPT\(content, retryOn401\)/);
 });
