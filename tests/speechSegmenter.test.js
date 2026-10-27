@@ -73,3 +73,10 @@ test('onSpeechStart вызывается один раз на реплику', (
     });
     assert.strictEqual(starts, 2);
 });
+
+test('отброшенный щелчок сообщает onSpeechDiscarded', () => {
+    let discarded = 0;
+    const { utterances } = run([...repeat(0.002, 10), 0.2, 0.2, ...repeat(0.002, 10)], { onSpeechDiscarded: () => discarded++ });
+    assert.strictEqual(utterances.length, 0);
+    assert.strictEqual(discarded, 1);
+});

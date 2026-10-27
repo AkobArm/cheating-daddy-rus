@@ -4,6 +4,7 @@ const { getSystemPrompt } = require('./prompts');
 const transcription = require('./transcription');
 const { createAudioMixer } = require('./audioMixer');
 const { createSpeechSegmenter } = require('./speechSegmenter');
+const { createUtteranceMerger } = require('./utteranceMerger');
 const realtime = require('./realtimeTranscription');
 const groq = require('./groqTranscription');
 const { ensureValidOpenAIAuth, refreshOpenAIAuth } = require('./openaiOAuth');
@@ -66,6 +67,7 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
             model,
             sessionId: crypto.randomUUID(),
             segmenter: null,
+            merger: null,
             sttEngine,
             langCode: (language || 'en-US').split('-')[0],
             useRealtime: wantRealtime,
@@ -79,9 +81,14 @@ async function initializeChatGPTSession(profile = 'interview', customPrompt = ''
         };
         session.segmenter = createSpeechSegmenter({
             silenceFrames: session.silenceFrames,
-            onSpeechStart: () => sendToRenderer('update-status', 'Listening... (speech detected)'),
+            onSpeechStart: () => {
+                session?.merger?.speechStarted();
+                sendToRenderer('update-status', 'Listening... (speech detected)');
+            },
+            onSpeechDiscarded: () => session?.merger?.speechAbandoned(),
             onUtterance: handleSpeechEnd,
         });
+        session.merger = createUtteranceMerger({ onReady: submitTranscription });
         const audioMode = prefs.audioMode || 'speaker_only';
         session.mixer = createAudioMixer(processMixedFrame, {
             expectMic: audioMode === 'mic_only' || audioMode === 'both',
@@ -179,13 +186,24 @@ async function handleSpeechEnd(audioData, stats) {
             text = await transcription.transcribeAudio(audioData, sendToRenderer);
         }
     } catch (error) {
+        session?.merger?.speechAbandoned();
         sendToRenderer('update-status', 'Transcription error: ' + error.message);
         return;
     }
+    if (!session) return;
     console.log(`[Timing] Распознавание: ${Date.now() - transcribeStartedAt} мс (${session.sttEngine})`);
     if (!text || transcription.isNoiseTranscription(text)) {
+        session.merger.speechAbandoned();
         sendToRenderer('update-status', 'Listening...');
         return;
+    }
+    session.merger.push(text, speechEndedAt);
+}
+
+function submitTranscription(text, { speechEndedAt, merged }) {
+    if (!session) return;
+    if (merged > 1) {
+        console.log(`[Merge] Склеено обрывков: ${merged}`);
     }
     pendingTranscription = text;
     pendingSpeechEndedAt = speechEndedAt;
@@ -495,6 +513,7 @@ async function askOneShot(instructions, userText, { model = 'gpt-6-luna', reason
 
 function closeChatGPTSession() {
     session?.mixer?.flush();
+    session?.merger?.reset();
     realtime.stopRealtimeTranscription();
     session = null;
     latestScreenshot = null;

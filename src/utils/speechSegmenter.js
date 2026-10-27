@@ -4,7 +4,7 @@ const NOISE_RISE_PER_FRAME = 1.02;
 const MIN_SPEECH_FRAMES = 3;
 const MAX_UTTERANCE_FRAMES = 200; // 20 с
 
-function createSpeechSegmenter({ silenceFrames, onUtterance, onSpeechStart = () => {} }) {
+function createSpeechSegmenter({ silenceFrames, onUtterance, onSpeechStart = () => {}, onSpeechDiscarded = () => {} }) {
     let buffer = [];
     let isSpeaking = false;
     let silenceCount = 0;
@@ -52,6 +52,7 @@ function createSpeechSegmenter({ silenceFrames, onUtterance, onSpeechStart = () 
             if (silenceCount >= silenceFrames) {
                 if (speechFrames < MIN_SPEECH_FRAMES) {
                     reset();
+                    onSpeechDiscarded();
                     return;
                 }
                 emit(false);
